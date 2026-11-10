@@ -20,7 +20,10 @@ jobs:
           
       - name: Install Dependencies
         run: |
-          pip install alpaca-py edgartools google-genai groq python-dotenv requests
+               - name: Install Dependencies
+        run: |
+          pip install yfinance edgartools google-genai groq python-dotenv requests
+
           
       - name: Execute Main Pipeline
         env:
