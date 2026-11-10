@@ -133,12 +133,19 @@ def analyze_with_fallback(prompt_text: str):
 
 
 def extract_confidence(report_text: str) -> int:
-  """Scans the LLM text output for a percentage confidence score."""
-  match = re.search(r"(\d{1,3})\s*%", report_text)
+  """Robustly scans LLM text for confidence scores, handling multiple formats."""
+  match = re.search(
+      r"(?:confidence|score)[:\s*]+(\d{1,3})\s*%?", report_text, re.IGNORECASE
+  )
   if match:
     val = int(match.group(1))
     return min(val, 100)
-  return 50  # Default baseline if missing
+
+  fallback_match = re.search(r"(\d{1,3})\s*%", report_text)
+  if fallback_match:
+    return min(int(fallback_match.group(1)), 100)
+
+  return 50
 
 
 def run_pipeline():
@@ -162,8 +169,10 @@ def run_pipeline():
         {news_summary}
 
         ### ANALYSIS TASK
-        Provide a concise trading breakdown. YOU MUST include an explicit confidence percentage score in your first line (e.g., "Confidence Score: 88% - BULLISH").
-        1. **Confidence Score & Bias:** (e.g., 85% BULLISH / 70% BEARISH / NEUTRAL)
+        Provide a concise trading breakdown. 
+        CRITICAL: Your response must include an explicit confidence percentage score (e.g., "Confidence Score: 85% BULLISH" or "Confidence Score: 78% BEARISH"). Evaluate bearish/short setups with equal mathematical weight if momentum warrants it.
+        
+        1. **Confidence Score & Bias:** (e.g., 85% BULLISH / 78% BEARISH)
         2. **Order Book / Flow Confluence:** Assess price action against broader market momentum (SPY/QQQ) and headline flow.
         3. **Actionable Trade Plan:** Entry zone, strict stop-loss/invalidation level, and profit targets.
         """
