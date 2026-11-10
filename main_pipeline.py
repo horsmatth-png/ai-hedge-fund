@@ -10,23 +10,21 @@ from google import genai
 from groq import Groq
 import requests
 
-# Load local .env if present (ignored on GitHub Actions)
 load_dotenv()
 
-# Required SEC User-Agent Header
 set_identity("QuantTrader research@example.com")
 
 ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
 ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 
 def fetch_alpaca_data(ticker: str):
-  """Pulls recent 1-minute bars from Alpaca's Free Tier with a safe start date."""
   try:
     client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
-    # Alpaca-py requires a start date when querying historical bars
     start_date = datetime.now() - timedelta(days=5)
     request_params = StockBarsRequest(
         symbol_or_symbols=ticker,
@@ -47,7 +45,6 @@ def fetch_alpaca_data(ticker: str):
 
 
 def fetch_finnhub_news(ticker: str):
-  """Fetches recent news articles via Finnhub REST API."""
   today = datetime.now().strftime("%Y-%m-%d")
   start_date = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
   url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={start_date}&to={today}&token={FINNHUB_API_KEY}"
@@ -69,7 +66,6 @@ def fetch_finnhub_news(ticker: str):
 
 
 def fetch_sec_form4(ticker: str):
-  """Parses recent SEC Form 4 insider filing data."""
   try:
     filings = Company(ticker).get_filings(form="4")
     if filings and len(filings) > 0:
@@ -82,25 +78,24 @@ def fetch_sec_form4(ticker: str):
 
 
 def analyze_with_fallback(prompt_text: str):
-  """Tries Gemini first; if it struggles or hits usage limits, falls back to Groq."""
-  # 1. Try Gemini Primary (auto-detects GEMINI_API_KEY from environment)
+  # 1. Try Gemini Primary with explicit API key passing
   try:
     print("--> Attempting analysis with Gemini 2.5 Flash...")
-    ai_client = genai.Client()
+    ai_client = genai.Client(api_key=GEMINI_API_KEY)
     response = ai_client.models.generate_content(
         model="gemini-2.5-flash", contents=prompt_text
     )
     if response and response.text:
       return response.text, "Gemini 2.5 Flash"
   except Exception as e:
-    print(f"⚠️ Gemini encountered an issue: {repr(e)}. Switching to Groq fallback...")
+    print(f"⚠️ Gemini encountered an issue: {repr(e)}. Switching to Groq...")
 
-  # 2. Fallback to Groq (auto-detects GROQ_API_KEY from environment)
+  # 2. Fallback to Groq using the stable llama-3.1-8b-instant model
   try:
-    print("--> Attempting analysis with Groq (llama-3.3-70b-versatile)...")
-    groq_client = Groq()
+    print("--> Attempting analysis with Groq (llama-3.1-8b-instant)...")
+    groq_client = Groq(api_key=GROQ_API_KEY)
     completion = groq_client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model="llama-3.1-8b-instant",
         messages=[
             {
                 "role": "system",
@@ -110,7 +105,7 @@ def analyze_with_fallback(prompt_text: str):
         ],
         temperature=0.3,
     )
-    return completion.choices[0].message.content, "Groq (Fallback)"
+    return completion.choices[0].message.content, "Groq (llama-3.1-8b-instant)"
   except Exception as e:
     print(f"❌ Groq fallback also failed: {repr(e)}")
     return f"Error: Both Gemini and Groq failed. Details: {repr(e)}", "None"
