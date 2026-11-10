@@ -78,7 +78,7 @@ def fetch_sec_form4(ticker: str):
 
 
 def analyze_with_fallback(prompt_text: str):
-  # 1. Try Gemini Primary with explicit API key passing
+  # 1. Try Gemini Primary with explicit API key
   try:
     print("--> Attempting analysis with Gemini 2.5 Flash...")
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -88,14 +88,14 @@ def analyze_with_fallback(prompt_text: str):
     if response and response.text:
       return response.text, "Gemini 2.5 Flash"
   except Exception as e:
-    print(f"⚠️ Gemini encountered an issue: {repr(e)}. Switching to Groq...")
+    print(f"⚠️ Gemini error: {repr(e)}. Switching to Groq fallback...")
 
-  # 2. Fallback to Groq using the stable llama-3.1-8b-instant model
+  # 2. Fallback to Groq using the current valid production model ID
   try:
-    print("--> Attempting analysis with Groq (llama-3.1-8b-instant)...")
+    print("--> Attempting analysis with Groq (openai/gpt-oss-20b)...")
     groq_client = Groq(api_key=GROQ_API_KEY)
     completion = groq_client.chat.completions.create(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         messages=[
             {
                 "role": "system",
@@ -105,10 +105,10 @@ def analyze_with_fallback(prompt_text: str):
         ],
         temperature=0.3,
     )
-    return completion.choices[0].message.content, "Groq (llama-3.1-8b-instant)"
+    return completion.choices[0].message.content, "Groq (openai/gpt-oss-20b)"
   except Exception as e:
     print(f"❌ Groq fallback also failed: {repr(e)}")
-    return f"Error: Both Gemini and Groq failed. Details: {repr(e)}", "None"
+    return f"Error: Both engines failed. Details: {repr(e)}", "None"
 
 
 def execute_pipeline(ticker: str):
