@@ -2,9 +2,17 @@ name: Pre-Market & Midday Signal Pipeline
 
 on:
   schedule:
-    # Runs at 07:15 UTC (8:15 AM UK time) and 14:00 UTC (2:00 PM UK time) Monday-Friday
-    - cron: '15 7,14 * * 1-5'
-  workflow_dispatch:
+    # 1. Morning Scan: 8:15 AM UK Time 
+    # (Runs at 07:15 UTC during BST / 08:15 UTC during GMT. Listed below for both offsets to ensure exact alignment)
+    - cron: '15 7 * * 1-5'  # March to October (BST: UTC+1)
+    - cron: '15 8 * * 1-5'  # October to March (GMT: UTC+0)
+
+    # 2. Midday Scan: 2:00 PM UK Time
+    # (Runs at 13:00 UTC during BST / 14:00 UTC during GMT)
+    - cron: '0 13 * * 1-5'  # March to October (BST: UTC+1)
+    - cron: '0 14 * * 1-5'  # October to March (GMT: UTC+0)
+
+  workflow_dispatch: # Allows manual triggering from the Actions tab
 
 jobs:
   run-pipeline:
@@ -20,15 +28,10 @@ jobs:
           
       - name: Install Dependencies
         run: |
-               - name: Install Dependencies
-        run: |
           pip install yfinance edgartools google-genai groq python-dotenv requests
-
           
       - name: Execute Main Pipeline
         env:
-          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
-          ALPACA_SECRET_KEY: ${{ secrets.ALPACA_SECRET_KEY }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
