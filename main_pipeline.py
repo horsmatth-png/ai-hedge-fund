@@ -1,41 +1,40 @@
 import os
 import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
-from alpaca.data.timeframe import TimeFrame
 from dotenv import load_dotenv
 from edgar import Company, set_identity
 from google import genai
 from groq import Groq
 import requests
+import yfinance as yf
 
 load_dotenv()
 
+# Set identity for SEC EDGAR rate limits
 set_identity("QuantTrader research@example.com")
 
-ALPACA_API_KEY = os.getenv("ALPACA_API_KEY")
-ALPACA_SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
+# Environment Keys
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-# Comprehensive Watchlist: Major Indexes + Top 15 US Market-Cap Leaders
+# Multi-Asset Watchlist: Indexes + Top US Equities
 WATCHLIST = [
     "SPY",
-    "QQQ",  # Major Market Indexes
+    "QQQ",  # Broad Market Indexes
     "AAPL",
     "NVDA",
     "MSFT",
     "GOOGL",
-    "AMZN",  # Mega-Cap Tech & AI
+    "AMZN",  # Tech & AI Leaders
     "META",
     "AVGO",
     "TSLA",
     "LLY",
-    "WMT",  # Growth & Consumer Giants
+    "WMT",  # Growth & Staples
     "JPM",
     "MU",
     "AMD",
@@ -44,50 +43,79 @@ WATCHLIST = [
 ]
 
 
-def fetch_alpaca_data(ticker: str):
+def fetch_live_price(ticker: str):
+  """Pulls real-time consolidated market price (regular + extended hours) via yfinance with Finnhub fallback."""
+  # Primary: yfinance consolidated ticker data
   try:
-    client = StockHistoricalDataClient(ALPACA_API_KEY, ALPACA_SECRET_KEY)
-    start_date = datetime.now() - timedelta(days=5)
-    request_params = StockBarsRequest(
-        symbol_or_symbols=ticker,
-        timeframe=TimeFrame.Minute,
-        start=start_date,
-        limit=15,
-    )
-    bars = client.get_stock_bars(request_params)
-
-    if ticker in bars and len(bars[ticker]) > 0:
-      recent_bars = bars[ticker]
-      latest_close = recent_bars[-1].close
-      volume_sum = sum([b.volume for b in recent_bars])
-      return latest_close, volume_sum
+    t = yf.Ticker(ticker)
+    # fast_info provides real-time / post-market price
+    fast = t.fast_info
+    price = fast.get("lastPrice") or fast.get("regularMarketPreviousClose")
+    if price and price > 0:
+      return round(float(price), 2), "yfinance Consolidated"
   except Exception as e:
-    print(f"⚠️ Alpaca Fetch Error for {ticker}: {repr(e)}")
-  return None, None
+    print(f"⚠️ yfinance Fetch Error for {ticker}: {repr(e)}")
+
+  # Fallback: Finnhub Real-Time Quote API
+  try:
+    url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
+    res = requests.get(url, timeout=5)
+    if res.status_code == 200:
+      data = res.json()
+      current_price = data.get("c")  # Current / Close Price
+      if current_price and current_price > 0:
+        return round(float(current_price), 2), "Finnhub Quote"
+  except Exception as e:
+    print(f"⚠️ Finnhub Fallback Error for {ticker}: {repr(e)}")
+
+  return None, "Unavailable"
 
 
-def fetch_finnhub_news(ticker: str):
+def fetch_enhanced_news(ticker: str) -> str:
+  """Combines Finnhub company news with Google News RSS to capture front-page
+
+  governance scandals, executive risks, and macro catalysts.
+  """
+  collected_headlines = []
+
+  # Source 1: Finnhub Company News
   today = datetime.now().strftime("%Y-%m-%d")
   start_date = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
-  url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={start_date}&to={today}&token={FINNHUB_API_KEY}"
+  url_ticker = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={start_date}&to={today}&token={FINNHUB_API_KEY}"
 
   try:
-    res = requests.get(url)
+    res = requests.get(url_ticker, timeout=5)
     if res.status_code == 200:
       articles = res.json()
-      if articles:
-        headlines = []
-        for item in articles[:3]:
-          headlines.append(
-              f"• {item.get('headline', '')}: {item.get('summary', '')[:100]}..."
-          )
-        return "\n".join(headlines)
+      for item in articles[:3]:
+        headline = item.get("headline", "")
+        summary = item.get("summary", "")[:100]
+        if headline:
+          collected_headlines.append(f"• [Finnhub] {headline}: {summary}...")
   except Exception as e:
-    print(f"⚠️ Finnhub Fetch Error for {ticker}: {repr(e)}")
-  return "No recent news retrieved."
+    print(f"⚠️ Finnhub News Error for {ticker}: {repr(e)}")
+
+  # Source 2: Google News RSS Search (Captures High-Impact Breaking Scandals/Probes)
+  try:
+    rss_url = f"https://news.google.com/rss/search?q={ticker}+stock+when:2d&hl=en-US&gl=US&ceid=US:en"
+    rss_res = requests.get(rss_url, timeout=5)
+    if rss_res.status_code == 200:
+      root = ET.fromstring(rss_res.content)
+      for item in root.findall(".//item")[:3]:
+        title = item.find("title").text if item.find("title") is not None else ""
+        if title:
+          collected_headlines.append(f"• [Breaking Catalyst] {title}")
+  except Exception as e:
+    print(f"⚠️ RSS News Fetch Error for {ticker}: {repr(e)}")
+
+  if collected_headlines:
+    return "\n".join(collected_headlines)
+
+  return "No recent breaking news retrieved."
 
 
 def fetch_sec_form4(ticker: str):
+  """Pulls recent SEC Form 4 insider buying/selling transactions."""
   if ticker in ["SPY", "QQQ"]:
     return "N/A (Index ETF)"
   try:
@@ -102,6 +130,7 @@ def fetch_sec_form4(ticker: str):
 
 
 def analyze_with_fallback(prompt_text: str):
+  """Sends prompt to Gemini 2.5 Flash with Groq fallback."""
   # 1. Try Gemini Primary
   try:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -121,7 +150,10 @@ def analyze_with_fallback(prompt_text: str):
         messages=[
             {
                 "role": "system",
-                "content": "You are an expert quantitative market analyst.",
+                "content": (
+                    "You are an expert quantitative market analyst evaluating"
+                    " risk and momentum."
+                ),
             },
             {"role": "user", "content": prompt_text},
         ],
@@ -133,7 +165,7 @@ def analyze_with_fallback(prompt_text: str):
 
 
 def extract_confidence(report_text: str) -> int:
-  """Robustly scans LLM text for confidence scores, handling multiple formats."""
+  """Scans LLM output text for confidence percentages across various formats."""
   match = re.search(
       r"(?:confidence|score)[:\s*]+(\d{1,3})\s*%?", report_text, re.IGNORECASE
   )
@@ -145,36 +177,37 @@ def extract_confidence(report_text: str) -> int:
   if fallback_match:
     return min(int(fallback_match.group(1)), 100)
 
-  return 50
+  return 50  # Default baseline if unparseable
 
 
 def run_pipeline():
   scanned_results = []
 
   for ticker in WATCHLIST:
-    print(f"\n--> Processing multi-source scan for ${ticker}...")
+    print(f"\n--> Ingesting real-time data feeds for ${ticker}...")
 
-    price, volume = fetch_alpaca_data(ticker)
-    news_summary = fetch_finnhub_news(ticker)
+    price, price_source = fetch_live_price(ticker)
+    news_summary = fetch_enhanced_news(ticker)
     insider_summary = fetch_sec_form4(ticker)
 
     prompt = f"""
         You are an institutional AI Quantitative Trading Assistant analyzing ticker ${ticker}.
 
-        ### MARKET DATA & FEEDS
-        - Latest Price Feed: ${price if price else 'N/A'}
-        - Recent Volume Profile: {volume if volume else 'N/A'}
+        ### REAL-TIME & STRUCTURAL FEEDS
+        - Live Market/Close Price: ${price if price else 'N/A'} (Source: {price_source})
         - SEC Form 4 Insider Sentiment: {insider_summary}
-        - Recent News & Macro Catalysts:
+        - Breaking News, Scandals & Geopolitical Catalysts:
         {news_summary}
 
         ### ANALYSIS TASK
-        Provide a concise trading breakdown. 
-        CRITICAL: Your response must include an explicit confidence percentage score (e.g., "Confidence Score: 85% BULLISH" or "Confidence Score: 78% BEARISH"). Evaluate bearish/short setups with equal mathematical weight if momentum warrants it.
-        
-        1. **Confidence Score & Bias:** (e.g., 85% BULLISH / 78% BEARISH)
-        2. **Order Book / Flow Confluence:** Assess price action against broader market momentum (SPY/QQQ) and headline flow.
-        3. **Actionable Trade Plan:** Entry zone, strict stop-loss/invalidation level, and profit targets.
+        Synthesize these signals into a concise quantitative trade breakdown. 
+        CRITICAL INSTRUCTIONS:
+        1. Your response MUST begin its first section with an explicit numerical confidence rating in this format: "CONFIDENCE_SCORE: [XX]%" (e.g., CONFIDENCE_SCORE: 88% BEARISH or CONFIDENCE_SCORE: 85% BULLISH).
+        2. Evaluate executive governance risks, legal probes, regulatory investigations, and headline scandals with FULL weight. Do not shy away from giving BEARISH / SHORT setups high confidence scores (80%+) when downside momentum and negative catalysts align.
+
+        1. **Confidence Score & Bias:** (e.g., 88% BEARISH / 85% BULLISH)
+        2. **Order Book / Flow Confluence:** Combine technical price action with news catalysts and macro/sector momentum (SPY/QQQ).
+        3. **Actionable Trade Plan:** Specific entry setup, strict stop-loss/invalidation level, and profit targets.
         """
 
     report_text, engine_used = analyze_with_fallback(prompt)
@@ -187,17 +220,17 @@ def run_pipeline():
         "engine": engine_used,
     })
 
-    time.sleep(1.5)
+    time.sleep(1.5)  # Throttle to respect API rate limits
 
-  # Sort all results by confidence score descending and slice top 5
+  # Sort by confidence descending and select Top 5
   scanned_results.sort(key=lambda x: x["confidence"], reverse=True)
   top_5 = scanned_results[:5]
 
-  print("\n--> Generating and dispatching Top 5 Shortlist to Discord...")
+  print("\n--> Dispatching Top 5 Ranked Shortlist to Discord...")
 
   shortlist_description = (
       "### 🏆 Top 5 Ranked High-Confidence Setups\n"
-      + "Synthesized across major indices and top US equities:\n\n"
+      + "Synthesized across major indices, mega-cap tech, and market leaders:\n\n"
   )
 
   for i, item in enumerate(top_5, 1):
@@ -205,6 +238,7 @@ def run_pipeline():
         f"**{i}. ${item['ticker']}** — `{item['confidence']}% Confidence`\n"
     )
 
+  # Post Primary Shortlist Summary
   payload = {
       "username": "AI Quant Engine",
       "embeds": [
@@ -218,9 +252,9 @@ def run_pipeline():
           }
       ],
   }
-
   requests.post(DISCORD_WEBHOOK_URL, json=payload)
 
+  # Post Individual Detailed Embeds for the Top 5
   for item in top_5:
     detail_payload = {
         "username": "AI Quant Engine",
