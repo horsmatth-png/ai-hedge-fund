@@ -2,9 +2,9 @@ name: Pre-Market & Midday Signal Pipeline
 
 on:
   schedule:
-    # Runs at 07:15 UTC (8:15 AM UK BST/GMT) and 14:00 UTC (2:00 PM UK BST/GMT) Monday-Friday
+    # Runs at 07:15 UTC (8:15 AM UK time) and 14:00 UTC (2:00 PM UK time) Monday-Friday
     - cron: '15 7,14 * * 1-5'
-  workflow_dispatch: # Allows manual triggering from the GitHub Actions tab
+  workflow_dispatch:
 
 jobs:
   run-pipeline:
