@@ -1,4 +1,5 @@
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from alpaca.data.historical import StockHistoricalDataClient
@@ -21,6 +22,27 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# Comprehensive Watchlist: Major Indexes + Top 15 US Market-Cap Leaders
+WATCHLIST = [
+    "SPY",
+    "QQQ",  # Major Market Indexes
+    "AAPL",
+    "NVDA",
+    "MSFT",
+    "GOOGL",
+    "AMZN",  # Mega-Cap Tech & AI
+    "META",
+    "AVGO",
+    "TSLA",
+    "LLY",
+    "WMT",  # Growth & Consumer Giants
+    "JPM",
+    "MU",
+    "AMD",
+    "V",
+    "XOM",  # Financials, Semiconductors & Energy
+]
+
 
 def fetch_alpaca_data(ticker: str):
   try:
@@ -30,7 +52,7 @@ def fetch_alpaca_data(ticker: str):
         symbol_or_symbols=ticker,
         timeframe=TimeFrame.Minute,
         start=start_date,
-        limit=10,
+        limit=15,
     )
     bars = client.get_stock_bars(request_params)
 
@@ -40,7 +62,7 @@ def fetch_alpaca_data(ticker: str):
       volume_sum = sum([b.volume for b in recent_bars])
       return latest_close, volume_sum
   except Exception as e:
-    print(f"⚠️ Alpaca Fetch Error: {repr(e)}")
+    print(f"⚠️ Alpaca Fetch Error for {ticker}: {repr(e)}")
   return None, None
 
 
@@ -57,15 +79,17 @@ def fetch_finnhub_news(ticker: str):
         headlines = []
         for item in articles[:3]:
           headlines.append(
-              f"• {item.get('headline', '')}: {item.get('summary', '')[:120]}..."
+              f"• {item.get('headline', '')}: {item.get('summary', '')[:100]}..."
           )
         return "\n".join(headlines)
   except Exception as e:
-    print(f"⚠️ Finnhub Fetch Error: {repr(e)}")
+    print(f"⚠️ Finnhub Fetch Error for {ticker}: {repr(e)}")
   return "No recent news retrieved."
 
 
 def fetch_sec_form4(ticker: str):
+  if ticker in ["SPY", "QQQ"]:
+    return "N/A (Index ETF)"
   try:
     filings = Company(ticker).get_filings(form="4")
     if filings and len(filings) > 0:
@@ -73,14 +97,13 @@ def fetch_sec_form4(ticker: str):
       summary = f4.get_ownership_summary()
       return f"Insider: {summary.insider_name} | Action: {summary.primary_activity} | Net Value: ${summary.net_value:,.0f}"
   except Exception as e:
-    print(f"⚠️ SEC Edgar Error: {repr(e)}")
+    print(f"⚠️ SEC Edgar Error for {ticker}: {repr(e)}")
   return "No recent SEC Form 4 insider filings."
 
 
 def analyze_with_fallback(prompt_text: str):
-  # 1. Try Gemini Primary with explicit API key
+  # 1. Try Gemini Primary
   try:
-    print("--> Attempting analysis with Gemini 2.5 Flash...")
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
     response = ai_client.models.generate_content(
         model="gemini-2.5-flash", contents=prompt_text
@@ -90,9 +113,8 @@ def analyze_with_fallback(prompt_text: str):
   except Exception as e:
     print(f"⚠️ Gemini error: {repr(e)}. Switching to Groq fallback...")
 
-  # 2. Fallback to Groq using the current valid production model ID
+  # 2. Fallback to Groq
   try:
-    print("--> Attempting analysis with Groq (openai/gpt-oss-20b)...")
     groq_client = Groq(api_key=GROQ_API_KEY)
     completion = groq_client.chat.completions.create(
         model="openai/gpt-oss-20b",
@@ -107,63 +129,106 @@ def analyze_with_fallback(prompt_text: str):
     )
     return completion.choices[0].message.content, "Groq (openai/gpt-oss-20b)"
   except Exception as e:
-    print(f"❌ Groq fallback also failed: {repr(e)}")
     return f"Error: Both engines failed. Details: {repr(e)}", "None"
 
 
-def execute_pipeline(ticker: str):
-  print(f"--> Ingesting multi-source data feeds for ${ticker}...")
-
-  price, volume = fetch_alpaca_data(ticker)
-  news_summary = fetch_finnhub_news(ticker)
-  insider_summary = fetch_sec_form4(ticker)
-
-  prompt = f"""
-    You are an AI Trading Assistant synthesizing pre-market and intraday market data for ticker ${ticker}.
-
-    ### REAL-TIME & STRUCTURAL FEEDS
-    - Latest Price (Alpaca IEX): ${price if price else 'N/A'}
-    - 10-Min Volume (IEX): {volume if volume else 'N/A'}
-    - SEC Form 4 Insider Bias: {insider_summary}
-    - Recent Breaking News (Finnhub):
-    {news_summary}
-
-    ### ANALYSIS TASK
-    Synthesize these signals and format a concise report:
-    1. **Overall Bias:** (BULLISH / BEARISH / NEUTRAL)
-    2. **Signal Confluence:** Combine insider activity with news catalysts and price action.
-    3. **Key Levels & Trade Plan:** Direct entry setup, invalidation/stop-loss level, and initial target.
-    """
-
-  report_text, engine_used = analyze_with_fallback(prompt)
-  return report_text, engine_used
+def extract_confidence(report_text: str) -> int:
+  """Scans the LLM text output for a percentage confidence score."""
+  match = re.search(r"(\d{1,3})\s*%", report_text)
+  if match:
+    val = int(match.group(1))
+    return min(val, 100)
+  return 50  # Default baseline if missing
 
 
-def send_discord_webhook(ticker: str, report_text: str, engine_used: str):
+def run_pipeline():
+  scanned_results = []
+
+  for ticker in WATCHLIST:
+    print(f"\n--> Processing multi-source scan for ${ticker}...")
+
+    price, volume = fetch_alpaca_data(ticker)
+    news_summary = fetch_finnhub_news(ticker)
+    insider_summary = fetch_sec_form4(ticker)
+
+    prompt = f"""
+        You are an institutional AI Quantitative Trading Assistant analyzing ticker ${ticker}.
+
+        ### MARKET DATA & FEEDS
+        - Latest Price Feed: ${price if price else 'N/A'}
+        - Recent Volume Profile: {volume if volume else 'N/A'}
+        - SEC Form 4 Insider Sentiment: {insider_summary}
+        - Recent News & Macro Catalysts:
+        {news_summary}
+
+        ### ANALYSIS TASK
+        Provide a concise trading breakdown. YOU MUST include an explicit confidence percentage score in your first line (e.g., "Confidence Score: 88% - BULLISH").
+        1. **Confidence Score & Bias:** (e.g., 85% BULLISH / 70% BEARISH / NEUTRAL)
+        2. **Order Book / Flow Confluence:** Assess price action against broader market momentum (SPY/QQQ) and headline flow.
+        3. **Actionable Trade Plan:** Entry zone, strict stop-loss/invalidation level, and profit targets.
+        """
+
+    report_text, engine_used = analyze_with_fallback(prompt)
+    confidence = extract_confidence(report_text)
+
+    scanned_results.append({
+        "ticker": ticker,
+        "confidence": confidence,
+        "report": report_text,
+        "engine": engine_used,
+    })
+
+    time.sleep(1.5)
+
+  # Sort all results by confidence score descending and slice top 5
+  scanned_results.sort(key=lambda x: x["confidence"], reverse=True)
+  top_5 = scanned_results[:5]
+
+  print("\n--> Generating and dispatching Top 5 Shortlist to Discord...")
+
+  shortlist_description = (
+      "### 🏆 Top 5 Ranked High-Confidence Setups\n"
+      + "Synthesized across major indices and top US equities:\n\n"
+  )
+
+  for i, item in enumerate(top_5, 1):
+    shortlist_description += (
+        f"**{i}. ${item['ticker']}** — `{item['confidence']}% Confidence`\n"
+    )
+
   payload = {
       "username": "AI Quant Engine",
-      "embeds": [{
-          "title": f"🚨 Market Signal Report: ${ticker}",
-          "description": (
-              f"{report_text}\n\n*🤖 Analyzed via: **{engine_used}***"
-          ),
-          "color": 3447003,
-          "footer": {
-              "text": (
-                  f"Timestamp: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
-              )
-          },
-      }],
+      "embeds": [
+          {
+              "title": "🚨 Top 5 Quant Trading Shortlist",
+              "description": shortlist_description,
+              "color": 3447003,
+              "footer": {
+                  "text": f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
+              },
+          }
+      ],
   }
 
-  res = requests.post(DISCORD_WEBHOOK_URL, json=payload)
-  if res.status_code in [200, 204]:
-    print("--> Webhook successfully dispatched to Discord!")
-  else:
-    print(f"--> Failed to send Webhook: Status {res.status_code}")
+  requests.post(DISCORD_WEBHOOK_URL, json=payload)
+
+  for item in top_5:
+    detail_payload = {
+        "username": "AI Quant Engine",
+        "embeds": [{
+            "title": (
+                f"📊 Setup Details: ${item['ticker']}"
+                f" ({item['confidence']} Conf.)"
+            ),
+            "description": (
+                f"{item['report']}\n\n*🤖 Engine: **{item['engine']}***"
+            ),
+            "color": 5763719,
+        }],
+    }
+    requests.post(DISCORD_WEBHOOK_URL, json=detail_payload)
+    time.sleep(1)
 
 
 if __name__ == "__main__":
-  target_ticker = "NVDA"
-  report, engine = execute_pipeline(target_ticker)
-  send_discord_webhook(target_ticker, report, engine)
+  run_pipeline()
