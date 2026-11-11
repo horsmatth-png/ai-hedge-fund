@@ -148,36 +148,37 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     engine_used = "Unknown"
     response_text = ""
 
-    # Attempt 1: Gemini Primary
+    # Attempt 1: Gemini Primary (using active gemini-2.5-flash)
     if GEMINI_API_KEY:
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             response = model.generate_content(prompt)
             response_text = response.text
-            engine_used = "Google Gemini (gemini-1.5-flash)"
+            engine_used = "Google Gemini (gemini-2.5-flash)"
         except Exception as e:
             print(f"⚠️ GEMINI ERROR FOR {ticker}: {repr(e)}")
 
-    # Attempt 2: Groq Fallback
+    # Attempt 2: Groq Fallback (using active openai/gpt-oss-120b)
     if not response_text and GROQ_API_KEY:
         try:
             from groq import Groq
             groq_client = Groq(api_key=GROQ_API_KEY)
             completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-120b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=700,
+                max_tokens=800,
+                reasoning_effort="low"
             )
             response_text = completion.choices[0].message.content
-            engine_used = "Groq (llama-3.3-70b-versatile)"
+            engine_used = "Groq (openai/gpt-oss-120b)"
         except Exception as e:
             print(f"⚠️ GROQ ERROR FOR {ticker}: {repr(e)}")
 
     if not response_text:
-        response_text = f"**Analysis:** Price: ${price} | RSI: {rsi} (AI Engine Unavailable - Check GitHub Secrets)"
+        response_text = f"**Analysis:** Price: ${price} | RSI: {rsi} (AI Engine Unavailable)"
         engine_used = "Offline / Fallback"
 
     response_text += f"\n\n*Engine: {engine_used}*"
