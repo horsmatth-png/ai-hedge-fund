@@ -24,22 +24,22 @@ DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 # Multi-Asset Watchlist: Indexes + Top US Equities
 WATCHLIST = [
     "SPY",
-    "QQQ",  # Broad Market Indexes
+    "QQQ",
     "AAPL",
     "NVDA",
     "MSFT",
     "GOOGL",
-    "AMZN",  # Tech & AI Leaders
+    "AMZN",
     "META",
     "AVGO",
     "TSLA",
     "LLY",
-    "WMT",  # Growth & Staples
+    "WMT",
     "JPM",
     "MU",
     "AMD",
     "V",
-    "XOM",  # Financials, Semiconductors & Energy
+    "XOM",
 ]
 
 
@@ -50,7 +50,6 @@ def fetch_live_price_and_rsi(ticker: str):
     df = t.history(period="1mo", interval="1d")
 
     if not df.empty and len(df) >= 15:
-      # Calculate 14-day RSI
       delta = df["Close"].diff()
       gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
       loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -58,7 +57,6 @@ def fetch_live_price_and_rsi(ticker: str):
       rsi_series = 100 - (100 / (1 + rs))
       latest_rsi = round(float(rsi_series.iloc[-1]), 1)
 
-      # Extract latest live / close price
       fast = t.fast_info
       latest_price = (
           getattr(fast, "last_price", None)
@@ -73,7 +71,6 @@ def fetch_live_price_and_rsi(ticker: str):
   except Exception as e:
     print(f"⚠️ yfinance fetch/RSI error for {ticker}: {repr(e)}")
 
-  # Fallback: Finnhub Real-Time Quote
   try:
     url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
     res = requests.get(url, timeout=5)
@@ -89,13 +86,9 @@ def fetch_live_price_and_rsi(ticker: str):
 
 
 def fetch_enhanced_news(ticker: str) -> str:
-  """Combines Finnhub company news with Google News RSS to capture front-page
-
-  governance scandals, executive risks, and macro catalysts.
-  """
+  """Combines Finnhub news with Google News RSS."""
   collected_headlines = []
 
-  # Source 1: Finnhub Company News
   today = datetime.now().strftime("%Y-%m-%d")
   start_date = (datetime.now() - timedelta(days=2)).strftime("%Y-%m-%d")
   url_ticker = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={start_date}&to={today}&token={FINNHUB_API_KEY}"
@@ -112,7 +105,6 @@ def fetch_enhanced_news(ticker: str) -> str:
   except Exception as e:
     print(f"⚠️ Finnhub News Error for {ticker}: {repr(e)}")
 
-  # Source 2: Google News RSS Search (Captures High-Impact Scandals & Probes)
   try:
     rss_url = f"https://news.google.com/rss/search?q={ticker}+stock+when:2d&hl=en-US&gl=US&ceid=US:en"
     rss_res = requests.get(rss_url, timeout=5)
@@ -132,7 +124,7 @@ def fetch_enhanced_news(ticker: str) -> str:
 
 
 def fetch_sec_form4(ticker: str):
-  """Pulls recent SEC Form 4 insider buying/selling transactions."""
+  """Pulls recent SEC Form 4 insider transactions."""
   if ticker in ["SPY", "QQQ"]:
     return "N/A (Index ETF)"
   try:
@@ -148,7 +140,6 @@ def fetch_sec_form4(ticker: str):
 
 def analyze_with_fallback(prompt_text: str):
   """Sends prompt to Gemini 2.5 Flash with Groq fallback."""
-  # 1. Try Gemini Primary
   try:
     ai_client = genai.Client(api_key=GEMINI_API_KEY)
     response = ai_client.models.generate_content(
@@ -159,7 +150,6 @@ def analyze_with_fallback(prompt_text: str):
   except Exception as e:
     print(f"⚠️ Gemini error: {repr(e)}. Switching to Groq fallback...")
 
-  # 2. Fallback to Groq
   try:
     groq_client = Groq(api_key=GROQ_API_KEY)
     completion = groq_client.chat.completions.create(
@@ -182,7 +172,7 @@ def analyze_with_fallback(prompt_text: str):
 
 
 def extract_confidence(report_text: str) -> int:
-  """Scans LLM output text for confidence percentages across various formats."""
+  """Scans LLM output text for confidence percentages."""
   match = re.search(
       r"(?:confidence|score)[:\s*]+(\d{1,3})\s*%?", report_text, re.IGNORECASE
   )
@@ -194,14 +184,14 @@ def extract_confidence(report_text: str) -> int:
   if fallback_match:
     return min(int(fallback_match.group(1)), 100)
 
-  return 50  # Default baseline if unparseable
+  return 50
 
 
 def run_pipeline():
   scanned_results = []
 
   for ticker in WATCHLIST:
-    print(f"\n--> Ingesting real-time data feeds for ${ticker}...")
+    print(f"\n--> [08:15 Scan] Ingesting data for ${ticker}...")
 
     price, rsi, price_source = fetch_live_price_and_rsi(ticker)
     news_summary = fetch_enhanced_news(ticker)
@@ -218,16 +208,20 @@ def run_pipeline():
         {news_summary}
 
         ### ANALYSIS TASK & CRITICAL RULES
-        1. Your response MUST begin its first section with an explicit numerical confidence rating in this format: "CONFIDENCE_SCORE: [XX]%" (e.g., CONFIDENCE_SCORE: 88% BEARISH or CONFIDENCE_SCORE: 85% BULLISH).
-        2. TECHNICAL & RSI OVERSOLD FILTER:
-           - If RSI < 30 (Oversold), DO NOT give a high-confidence BEARISH / SHORT entry score (cap confidence below 65%). Short-squeeze relief rallies are statistically high probability when RSI < 30. Instead, recommend "Wait for Bounce / Retrace to Short".
-           - If RSI > 70 (Overbought), DO NOT give a high-confidence BULLISH / LONG entry score (cap confidence below 65%).
-        3. Evaluate executive governance risks, legal probes, regulatory investigations, and headline scandals with FULL weight, aligning entry triggers with RSI mechanics.
-        4. Actionable Trade Plan MUST state absolute target prices AND explicit IG Point Distances (where $1.00 move = 100 points) for entry, stop-loss, and take-profit targets.
+        1. Your response MUST begin its first section with an explicit numerical confidence rating: "CONFIDENCE_SCORE: [XX]%" (e.g., CONFIDENCE_SCORE: 88% BEARISH or CONFIDENCE_SCORE: 85% BULLISH).
+        2. TECHNICAL & RSI FILTER:
+           - If RSI < 30 (Oversold), DO NOT give a high-confidence BEARISH / SHORT score (cap below 65%). Short-squeeze relief rallies are statistically probable. Flag as "Wait for Bounce / Retrace".
+           - If RSI > 70 (Overbought), DO NOT give a high-confidence BULLISH / LONG score (cap below 65%).
+        3. Actionable IG Trade Plan MUST explicitly output:
+           - Target Entry Zone ($)
+           - Structural Invalidation Stop-Loss ($)
+           - IG Stop Distance (where $1.00 move = 100 IG points)
+           - IG Limit Distance (where $1.00 move = 100 IG points)
 
-        1. **Confidence Score & Bias:** (e.g., 88% BEARISH / 85% BULLISH)
-        2. **Technical & News Confluence:** Synthesize RSI levels, volume profile, news catalysts, and sector momentum (SPY/QQQ).
-        3. **Actionable IG Trade Plan:** Specific entry zone, invalidation stop-loss, and profit targets with IG Point Distances.
+        ### OUTPUT FORMAT
+        1. **Confidence Score & Bias:** (e.g., 88% BEARISH)
+        2. **Technical & News Confluence:** Synthesize RSI levels, catalysts, and momentum.
+        3. **Actionable IG Trade Plan:** Specific entry zone, invalidation stop, and target distances in IG points.
         """
 
     report_text, engine_used = analyze_with_fallback(prompt)
@@ -238,50 +232,52 @@ def run_pipeline():
         "confidence": confidence,
         "report": report_text,
         "engine": engine_used,
+        "price": price,
+        "rsi": rsi,
     })
 
-    time.sleep(1.5)  # Throttle to respect API rate limits
+    time.sleep(1.5)
 
-  # Sort by confidence descending and select Top 5
   scanned_results.sort(key=lambda x: x["confidence"], reverse=True)
   top_5 = scanned_results[:5]
 
-  print("\n--> Dispatching Top 5 Ranked Shortlist to Discord...")
+  print("\n--> Dispatching Morning Watchlist to Discord...")
 
   shortlist_description = (
-      "### 🏆 Top 5 Ranked High-Confidence Setups\n"
-      + "Synthesized across major indices, mega-cap tech, and market leaders:\n\n"
+      "### 📋 08:15 AM Morning Watchlist (Pending 15:00 Validation)\n"
+      + "⚠️ **Do NOT place active orders yet.** Setups will be re-validated at"
+      + " 15:00 UK to filter out pre-market sweeps.\n\n"
   )
 
   for i, item in enumerate(top_5, 1):
     shortlist_description += (
-        f"**{i}. ${item['ticker']}** — `{item['confidence']}% Confidence`\n"
+        f"**{i}. ${item['ticker']}** — `{item['confidence']}% Confidence` |"
+        f" Price: ${item['price']} | RSI: {item['rsi']}\n"
     )
 
-  # Post Primary Shortlist Summary
   payload = {
-      "username": "AI Quant Engine",
-      "embeds": [
-          {
-              "title": "🚨 Top 5 Quant Trading Shortlist",
-              "description": shortlist_description,
-              "color": 3447003,
-              "footer": {
-                  "text": f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
-              },
-          }
-      ],
+      "username": "AI Quant Engine (08:15 Pre-Market)",
+      "embeds": [{
+          "title": "🌅 Morning Watchlist Generated",
+          "description": shortlist_description,
+          "color": 3447003,
+          "footer": {
+              "text": (
+                  f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S UTC',"
+                  " time.gmtime())}"
+              )
+          },
+      }],
   }
   requests.post(DISCORD_WEBHOOK_URL, json=payload)
 
-  # Post Individual Detailed Embeds for the Top 5
   for item in top_5:
     detail_payload = {
-        "username": "AI Quant Engine",
+        "username": "AI Quant Engine (08:15 Pre-Market)",
         "embeds": [{
             "title": (
-                f"📊 Setup Details: ${item['ticker']}"
-                f" ({item['confidence']} Conf.)"
+                f"📊 Morning Setup: ${item['ticker']} ({item['confidence']}%"
+                " Conf.)"
             ),
             "description": (
                 f"{item['report']}\n\n*🤖 Engine: **{item['engine']}***"
