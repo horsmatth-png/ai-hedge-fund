@@ -4,7 +4,7 @@ on:
   schedule:
     - cron: '30 7 * * 1-5'   # 07:30 UTC = 08:30 AM UK Morning Scan
     - cron: '00 14 * * 1-5'  # 14:00 UTC = 15:00 PM UK US Validation & Contingency
-  workflow_dispatch:         # Allows manual test execution anytime via GitHub UI
+  workflow_dispatch:         # Allows manual test execution anytime via GitHub
 
 jobs:
   run-engine:
