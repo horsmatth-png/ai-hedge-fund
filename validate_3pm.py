@@ -1,5 +1,4 @@
 import os
-import time
 from datetime import datetime
 from dotenv import load_dotenv
 import requests
@@ -8,20 +7,25 @@ import yfinance as yf
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-VALIDATION_VERSION = "v2.1-smart-validation"
+VALIDATION_VERSION = "v3.1-us-10-validation"
 
-# Dynamic candidate list loaded from morning baseline
-TARGET_CANDIDATES = [
-    {"ticker": "NVDA", "morning_bias": "BEARISH", "morning_price": 173.90},
-    {"ticker": "TSLA", "morning_bias": "BEARISH", "morning_price": 385.00},
-    {"ticker": "QQQ", "morning_bias": "BEARISH", "morning_price": 500.00},
-    {"ticker": "AMD", "morning_bias": "BULLISH", "morning_price": 160.00},
-    {"ticker": "JPM", "morning_bias": "BULLISH", "morning_price": 220.00},
+# Full 10 Top US Equities Watchlist
+US_TARGET_CANDIDATES = [
+    {"ticker": "SPY", "morning_bias": "BULLISH", "morning_price": 580.00},
+    {"ticker": "QQQ", "morning_bias": "BULLISH", "morning_price": 500.00},
+    {"ticker": "AAPL", "morning_bias": "BULLISH", "morning_price": 230.00},
+    {"ticker": "NVDA", "morning_bias": "BULLISH", "morning_price": 140.00},
+    {"ticker": "MSFT", "morning_bias": "BULLISH", "morning_price": 420.00},
+    {"ticker": "GOOGL", "morning_bias": "BEARISH", "morning_price": 175.00},
+    {"ticker": "AMZN", "morning_bias": "BULLISH", "morning_price": 190.00},
+    {"ticker": "META", "morning_bias": "BULLISH", "morning_price": 580.00},
+    {"ticker": "AVGO", "morning_bias": "BULLISH", "morning_price": 180.00},
+    {"ticker": "TSLA", "morning_bias": "BEARISH", "morning_price": 220.00},
 ]
 
 
-def fetch_live_data(ticker: str):
-  """Pulls live price and 14-period RSI."""
+def fetch_us_data(ticker: str):
+  """Pulls live US price and 14-period RSI."""
   try:
     t = yf.Ticker(ticker)
     df = t.history(period="1mo", interval="1d")
@@ -30,15 +34,15 @@ def fetch_live_data(ticker: str):
       gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
       loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
       rs = gain / loss
-      latest_rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
+      rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
 
       fast = t.fast_info
-      latest_price = (
+      price = (
           getattr(fast, "last_price", None)
           or fast.get("lastPrice")
           or df["Close"].iloc[-1]
       )
-      return round(float(latest_price), 2), latest_rsi
+      return round(float(price), 2), rsi
   except Exception as e:
     print(f"⚠️ Fetch error for {ticker}: {repr(e)}")
   return None, 50.0
@@ -47,108 +51,103 @@ def fetch_live_data(ticker: str):
 def validate_trade_setup(
     ticker: str, bias: str, morning_price: float, live_price: float, rsi: float
 ):
-  """Validates if setup survived the opening bell volatility sweep."""
+  """Filters out opening-bell volatility traps."""
   if not live_price:
     return "DISCARD", "Unable to pull live price feed."
 
   pct_change = round(((live_price - morning_price) / morning_price) * 100, 2)
 
-  # BEARISH / SHORT RULES
   if bias == "BEARISH":
     if rsi < 30:
       return (
           "INVALIDATED ❌",
-          f"RSI is oversold ({rsi}). High risk of short-squeeze bounce.",
+          f"RSI oversold ({rsi}). High squeeze risk post-open.",
       )
     if live_price > (morning_price * 1.02):
       return (
           "INVALIDATED ❌",
-          f"Opening bell swept structural resistance (+{pct_change}% higher)."
-          " Stop would have been hit.",
+          f"Opening bell broke resistance (+{pct_change}%). Setup failed.",
       )
     if live_price < (morning_price * 0.98):
       return (
           "EXPIRED / MISSED ⚠️",
-          f"Target already reached (-{pct_change}% lower). Do not chase.",
+          f"Target already hit (-{pct_change}%). Do not chase.",
       )
     return (
         "CONFIRMED ✅",
-        f"Price (${live_price}, {pct_change}%) and RSI ({rsi}) intact. Safe to"
-        " execute short on IG.",
+        f"Price (${live_price}, {pct_change}%) & RSI ({rsi}) intact. Ready for"
+        " execution.",
     )
 
-  # BULLISH / LONG RULES
   if bias == "BULLISH":
     if rsi > 70:
       return (
           "INVALIDATED ❌",
-          f"RSI is overbought ({rsi}). High risk of pullback.",
+          f"RSI overbought ({rsi}). High pullback risk.",
       )
     if live_price < (morning_price * 0.98):
       return (
           "INVALIDATED ❌",
-          f"Opening bell swept support ({pct_change}% lower). Setup broken.",
+          f"Opening bell broke support ({pct_change}%). Setup failed.",
       )
     if live_price > (morning_price * 1.02):
       return (
           "EXPIRED / MISSED ⚠️",
-          f"Move already triggered (+{pct_change}% higher). Do not chase.",
+          f"Move already triggered (+{pct_change}%). Do not chase.",
       )
     return (
         "CONFIRMED ✅",
-        f"Price (${live_price}, {pct_change}%) and RSI ({rsi}) intact. Safe to"
-        " execute long on IG.",
+        f"Price (${live_price}, {pct_change}%) & RSI ({rsi}) intact. Ready for"
+        " execution.",
     )
 
   return "NEUTRAL", "No clear bias."
 
 
-def run_validation():
+def run_us_validation():
   current_hour = datetime.utcnow().hour
-  print("\n==================================================")
-  print(f"  🤖 RUNNING EXECUTION VALIDATION [{VALIDATION_VERSION}]")
+  print("==================================================")
+  print(f"  🇺🇸 RUNNING US 3 PM EXECUTION VALIDATION [{VALIDATION_VERSION}]")
   print(f"  🕒 Current UTC Hour: {current_hour}")
-  print("==================================================\n")
+  print("==================================================")
 
   results_summary = ""
 
-  for item in TARGET_CANDIDATES:
+  for item in US_TARGET_CANDIDATES:
     ticker = item["ticker"]
     bias = item["morning_bias"]
     m_price = item["morning_price"]
 
-    live_price, rsi = fetch_live_data(ticker)
+    live_price, rsi = fetch_us_data(ticker)
     status, reason = validate_trade_setup(ticker, bias, m_price, live_price, rsi)
 
     print(f"[{status}] ${ticker} ({bias}) -> {reason}")
 
     results_summary += (
         f"**${ticker} ({bias})** | `{status}`\n"
-        f"• Reference: ${m_price} | Live Price: ${live_price} | RSI: {rsi}\n"
+        f"• Ref: ${m_price} | Live: ${live_price} | RSI: {rsi}\n"
         f"• **Verdict:** {reason}\n\n"
     )
 
-  # Append manual run notice if triggered outside standard 3 PM slot
   title_suffix = (
-      " (Manual Run)" if (current_hour < 12 and current_hour >= 9) else ""
+      " (Manual Run)" if (current_hour < 12 and current_hour >= 8) else ""
   )
 
+  # Discord allows up to 4096 chars per description. Splitting if needed or sending full chunk.
   payload = {
-      "username": "AI Quant Execution Engine",
+      "username": "US 3PM Execution Validator",
       "embeds": [{
-          "title": f"🎯 Trade Validation Verdicts{title_suffix}",
+          "title": f"🇺🇸 Top 10 US Equities 3 PM Verdicts{title_suffix}",
           "description": results_summary,
           "color": 65280 if "CONFIRMED ✅" in results_summary else 16711680,
           "footer": {
-              "text": (
-                  f"Validated at: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}"
-              )
+              "text": f"Validated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
           },
       }],
   }
   requests.post(DISCORD_WEBHOOK_URL, json=payload)
-  print("\n--> Validation Verdicts sent to Discord successfully!")
+  print("\n--> US 3 PM 10-Stock Validation Verdicts sent to Discord successfully!")
 
 
 if __name__ == "__main__":
-  run_validation()
+  run_us_validation()
