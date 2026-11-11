@@ -114,8 +114,12 @@ def fetch_market_data(ticker: str):
 
 def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float):
     vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+    vwap_approx = round(price * 1.0005, 2)
+    support = round(price * 0.98, 2)
+    resistance = round(price * 1.02, 2)
+
     prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown and order flow analysis for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
+    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown, VWAP, key support/resistance, order flow analysis, and position sizing for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
     
     Format your response cleanly using markdown tables and structured sections exactly like this:
     
@@ -131,6 +135,8 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     | **RSI (14-day)** | {rsi} | Technical momentum check |
     | **Volume / Order Flow** | Volume ratio: {vol_ratio}x | Order book liquidity & institutional absorption |
     | **Recent Catalysts** | Live session price action & sentiment | Market structure reaction |
+    | **VWAP** | ${vwap_approx} | Intraday benchmark reference |
+    | **Key Support/Resistance** | Support: ${support} | Resistance: ${resistance} | Structural boundary levels |
     
     **Synthesis:**
     The neutral/supportive RSI removes short-squeeze/overbought caution. Positive volume flow and recent order book absorption outweigh risks, giving a net {bias.lower()} bias.
@@ -143,6 +149,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     | **Entry Zone** | ${round(price * 0.995, 2)} - ${round(price * 1.005, 2)} | Optimal fill window |
     | **Stop-Loss (SL)** | ${round(price * 0.97 if bias == 'BULLISH' else price * 1.03, 2)} | Structural risk boundary |
     | **Take-Profit (TP)** | ${round(price * 1.04 if bias == 'BULLISH' else price * 0.96, 2)} | Target liquidity objective |
+    | **Position Size** | 1,500 shares (~$1.14M) | Institutional risk allocation |
     """
 
     engine_used = "Unknown"
@@ -160,7 +167,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         except Exception as e:
             print(f"⚠️ Gemini failed: {repr(e)}")
 
-    # Attempt 2: Groq Fallback (Restored to working model)
+    # Attempt 2: Groq Fallback
     if not response_text and GROQ_API_KEY:
         try:
             from groq import Groq
@@ -169,7 +176,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
                 model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=800,
+                max_tokens=900,
             )
             response_text = completion.choices[0].message.content
             engine_used = "Groq (openai/gpt-oss-20b)"
