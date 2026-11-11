@@ -11,31 +11,23 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ==========================================
-# 🇬🇧 UK MORNING SCAN LOGIC (08:30 AM UK)
+# 🇬🇧 UK DYNAMIC SCANNER (08:30 AM UK)
 # ==========================================
-def get_uk_dynamic_universe():
-    return [
-        {"ticker": "SHEL.L", "name": "Shell plc"},
-        {"ticker": "AZN.L", "name": "AstraZeneca"},
-        {"ticker": "HSBA.L", "name": "HSBC Holdings"},
-        {"ticker": "ULVR.L", "name": "Unilever"},
-        {"ticker": "BP.L", "name": "BP plc"},
-        {"ticker": "GSK.L", "name": "GSK plc"},
-        {"ticker": "RIO.L", "name": "Rio Tinto"},
-        {"ticker": "DGE.L", "name": "Diageo"},
-        {"ticker": "REL.L", "name": "RELX"},
-        {"ticker": "LLOY.L", "name": "Lloyds Banking Group"}
-    ]
+UK_WATCH_UNIVERSE = [
+    "SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", 
+    "GSK.L", "RIO.L", "DGE.L", "REL.L", "LLOY.L",
+    "BARC.L", "VOD.L", "GLEN.L", "NG.L", "RR.L"
+]
 
 def run_uk_morning_scan():
     print("==================================================")
-    print("  🇬🇧 RUNNING UK DYNAMIC MORNING SCAN (08:30 AM)")
+    print("  🇬🇧 RUNNING UK DYNAMIC MORNING LIQUIDITY SCAN")
     print("==================================================")
     
-    summary = ""
-    for item in get_uk_dynamic_universe():
+    scanned_results = []
+    for ticker in UK_WATCH_UNIVERSE:
         try:
-            t = yf.Ticker(item["ticker"])
+            t = yf.Ticker(ticker)
             df = t.history(period="1mo", interval="1d")
             if not df.empty and len(df) >= 15:
                 delta = df["Close"].diff()
@@ -48,26 +40,47 @@ def run_uk_morning_scan():
                 price = getattr(fast, 'last_price', None) or fast.get('lastPrice') or df["Close"].iloc[-1]
                 price = round(float(price), 2)
                 
+                volume = df["Volume"].iloc[-1]
+                avg_volume = df["Volume"].rolling(window=10).mean().iloc[-1]
+                vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
                 bias = "BULLISH 📈" if rsi > 50 else "BEARISH 📉"
-                summary += f"**{item['name']} (`{item['ticker']}`)** | Price: `£{price}` | RSI: `{rsi}` | Bias: **{bias}**\n"
+                scanned_results.append({
+                    "ticker": ticker,
+                    "price": price,
+                    "rsi": rsi,
+                    "vol_ratio": vol_ratio,
+                    "bias": bias
+                })
         except Exception as e:
-            print(f"⚠️ Error fetching {item['ticker']}: {repr(e)}")
+            print(f"⚠️ Error scanning {ticker}: {repr(e)}")
+
+    # Sort dynamically by volume ratio to surface highest institutional interest
+    scanned_results.sort(key=lambda x: x["vol_ratio"], reverse=True)
+    top_picks = scanned_results[:6]
+
+    summary = "🔥 **Top Dynamic UK Momentum & Volume Surges:**\n\n"
+    for item in top_picks:
+        summary += (
+            f"🔹 **`{item['ticker']}`** | Price: `£{item['price']}` | "
+            f"RSI: `{item['rsi']}` | Vol Ratio: `{item['vol_ratio']}x` | **{item['bias']}**\n"
+        )
 
     payload = {
-        "username": "UK Morning Dynamic Scanner",
+        "username": "UK Dynamic Momentum Scanner",
         "embeds": [{
-            "title": "🇬🇧 UK Equities Morning Watchlist (08:30 AM)",
+            "title": "🇬🇧 UK Equities Dynamic Morning Scan",
             "description": summary,
             "color": 3447003,
-            "footer": {"text": f"Scanned at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
+            "footer": {"text": f"Dynamic Scan at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
         }]
     }
     if DISCORD_WEBHOOK_URL:
         requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    print("--> UK Morning Watchlist posted to Discord successfully!")
+    print("--> UK Dynamic Watchlist posted to Discord successfully!")
 
 # ==========================================
-# 🇺🇸 US AFTERNOON VALIDATION & AI ENGINE (15:00 PM UK)
+# 🇺🇸 US DYNAMIC VALIDATION & AI ENGINE
 # ==========================================
 US_PRIMARY_UNIVERSE = [
     {"ticker": "SPY", "bias": "BULLISH", "ref_price": 580.00},
@@ -148,7 +161,6 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     engine_used = "Unknown"
     response_text = ""
 
-    # Attempt 1: Gemini Primary
     if GEMINI_API_KEY:
         try:
             import google.generativeai as genai
@@ -160,7 +172,6 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         except Exception as e:
             print(f"⚠️ Gemini failed: {repr(e)}")
 
-    # Attempt 2: Groq Fallback
     if not response_text and GROQ_API_KEY:
         try:
             from groq import Groq
@@ -182,7 +193,6 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
 
     response_text += f"\n\n*Engine: {engine_used}*"
     
-    # Determine color stripe based on bias (Green for Bullish = 3066993, Red for Bearish = 15158332)
     embed_color = 3066993 if bias == "BULLISH" else 15158332
 
     return {
@@ -211,9 +221,7 @@ def run_us_validation():
         if not live_price:
             continue
 
-        pct_change = round(((live_price - ref_price) / ref_price) * 100, 2)
         is_valid = True
-
         if bias == "BEARISH" and (rsi < 30 or live_price > (ref_price * 1.02)):
             is_valid = False
         elif bias == "BULLISH" and (rsi > 70 or live_price < (ref_price * 0.98)):
@@ -229,7 +237,6 @@ def run_us_validation():
         else:
             print(f"❌ ${ticker} invalidated or swept by opening bell.")
 
-    # All-Red Contingency Protocol Trigger
     if confirmed_count == 0:
         print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero primary setups confirmed. Running dynamic backup scan...")
         scanned_backups = []
