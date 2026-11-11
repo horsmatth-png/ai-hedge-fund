@@ -43,32 +43,49 @@ WATCHLIST = [
 ]
 
 
-def fetch_live_price(ticker: str):
-  """Pulls real-time consolidated market price (regular + extended hours) via yfinance with Finnhub fallback."""
-  # Primary: yfinance consolidated ticker data
+def fetch_live_price_and_rsi(ticker: str):
+  """Pulls real-time price and calculates 14-period RSI using yfinance history."""
   try:
     t = yf.Ticker(ticker)
-    # fast_info provides real-time / post-market price
-    fast = t.fast_info
-    price = fast.get("lastPrice") or fast.get("regularMarketPreviousClose")
-    if price and price > 0:
-      return round(float(price), 2), "yfinance Consolidated"
-  except Exception as e:
-    print(f"⚠️ yfinance Fetch Error for {ticker}: {repr(e)}")
+    df = t.history(period="1mo", interval="1d")
 
-  # Fallback: Finnhub Real-Time Quote API
+    if not df.empty and len(df) >= 15:
+      # Calculate 14-day RSI
+      delta = df["Close"].diff()
+      gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+      loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+      rs = gain / loss
+      rsi_series = 100 - (100 / (1 + rs))
+      latest_rsi = round(float(rsi_series.iloc[-1]), 1)
+
+      # Extract latest live / close price
+      fast = t.fast_info
+      latest_price = (
+          getattr(fast, "last_price", None)
+          or fast.get("lastPrice")
+          or df["Close"].iloc[-1]
+      )
+      return (
+          round(float(latest_price), 2),
+          latest_rsi,
+          "yfinance Consolidated + RSI",
+      )
+  except Exception as e:
+    print(f"⚠️ yfinance fetch/RSI error for {ticker}: {repr(e)}")
+
+  # Fallback: Finnhub Real-Time Quote
   try:
     url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
     res = requests.get(url, timeout=5)
     if res.status_code == 200:
       data = res.json()
-      current_price = data.get("c")  # Current / Close Price
+      current_price = data.get("c")
       if current_price and current_price > 0:
-        return round(float(current_price), 2), "Finnhub Quote"
+        return round(float(current_price), 2), 50.0, "Finnhub Quote (No RSI)"
   except Exception as e:
-    print(f"⚠️ Finnhub Fallback Error for {ticker}: {repr(e)}")
+    print(f"⚠️ Finnhub fallback error for {ticker}: {repr(e)}")
 
-  return None, "Unavailable"
+  return None, 50.0, "Unavailable"
 
 
 def fetch_enhanced_news(ticker: str) -> str:
@@ -95,7 +112,7 @@ def fetch_enhanced_news(ticker: str) -> str:
   except Exception as e:
     print(f"⚠️ Finnhub News Error for {ticker}: {repr(e)}")
 
-  # Source 2: Google News RSS Search (Captures High-Impact Breaking Scandals/Probes)
+  # Source 2: Google News RSS Search (Captures High-Impact Scandals & Probes)
   try:
     rss_url = f"https://news.google.com/rss/search?q={ticker}+stock+when:2d&hl=en-US&gl=US&ceid=US:en"
     rss_res = requests.get(rss_url, timeout=5)
@@ -186,28 +203,31 @@ def run_pipeline():
   for ticker in WATCHLIST:
     print(f"\n--> Ingesting real-time data feeds for ${ticker}...")
 
-    price, price_source = fetch_live_price(ticker)
+    price, rsi, price_source = fetch_live_price_and_rsi(ticker)
     news_summary = fetch_enhanced_news(ticker)
     insider_summary = fetch_sec_form4(ticker)
 
     prompt = f"""
         You are an institutional AI Quantitative Trading Assistant analyzing ticker ${ticker}.
 
-        ### REAL-TIME & STRUCTURAL FEEDS
-        - Live Market/Close Price: ${price if price else 'N/A'} (Source: {price_source})
+        ### REAL-TIME & TECHNICAL FEEDS
+        - Live Market Price: ${price if price else 'N/A'} (Source: {price_source})
+        - 14-Day Relative Strength Index (RSI): {rsi}
         - SEC Form 4 Insider Sentiment: {insider_summary}
-        - Breaking News, Scandals & Geopolitical Catalysts:
+        - Breaking News & Catalysts:
         {news_summary}
 
-        ### ANALYSIS TASK
-        Synthesize these signals into a concise quantitative trade breakdown. 
-        CRITICAL INSTRUCTIONS:
+        ### ANALYSIS TASK & CRITICAL RULES
         1. Your response MUST begin its first section with an explicit numerical confidence rating in this format: "CONFIDENCE_SCORE: [XX]%" (e.g., CONFIDENCE_SCORE: 88% BEARISH or CONFIDENCE_SCORE: 85% BULLISH).
-        2. Evaluate executive governance risks, legal probes, regulatory investigations, and headline scandals with FULL weight. Do not shy away from giving BEARISH / SHORT setups high confidence scores (80%+) when downside momentum and negative catalysts align.
+        2. TECHNICAL & RSI OVERSOLD FILTER:
+           - If RSI < 30 (Oversold), DO NOT give a high-confidence BEARISH / SHORT entry score (cap confidence below 65%). Short-squeeze relief rallies are statistically high probability when RSI < 30. Instead, recommend "Wait for Bounce / Retrace to Short".
+           - If RSI > 70 (Overbought), DO NOT give a high-confidence BULLISH / LONG entry score (cap confidence below 65%).
+        3. Evaluate executive governance risks, legal probes, regulatory investigations, and headline scandals with FULL weight, aligning entry triggers with RSI mechanics.
+        4. Actionable Trade Plan MUST state absolute target prices AND explicit IG Point Distances (where $1.00 move = 100 points) for entry, stop-loss, and take-profit targets.
 
         1. **Confidence Score & Bias:** (e.g., 88% BEARISH / 85% BULLISH)
-        2. **Order Book / Flow Confluence:** Combine technical price action with news catalysts and macro/sector momentum (SPY/QQQ).
-        3. **Actionable Trade Plan:** Specific entry setup, strict stop-loss/invalidation level, and profit targets.
+        2. **Technical & News Confluence:** Synthesize RSI levels, volume profile, news catalysts, and sector momentum (SPY/QQQ).
+        3. **Actionable IG Trade Plan:** Specific entry zone, invalidation stop-loss, and profit targets with IG Point Distances.
         """
 
     report_text, engine_used = analyze_with_fallback(prompt)
