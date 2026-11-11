@@ -15,6 +15,9 @@ load_dotenv()
 # Set identity for SEC EDGAR rate limits
 set_identity("QuantTrader research@example.com")
 
+# Pipeline Version Tag (Forces git diff change)
+PIPELINE_VERSION = "v2.0-morning-prep"
+
 # Environment Keys
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -188,6 +191,7 @@ def extract_confidence(report_text: str) -> int:
 
 
 def run_pipeline():
+  print(f"🚀 Initializing Morning Prep Scan [{PIPELINE_VERSION}]")
   scanned_results = []
 
   for ticker in WATCHLIST:
