@@ -7,6 +7,8 @@ import yfinance as yf
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 # ==========================================
 # 🇬🇧 UK MORNING SCAN LOGIC (08:30 AM UK)
@@ -32,17 +34,20 @@ def run_uk_morning_scan():
     
     summary = ""
     for item in get_uk_dynamic_universe():
-        t = yf.Ticker(item["ticker"])
-        df = t.history(period="1mo", interval="1d")
-        if not df.empty and len(df) >= 15:
-            delta = df["Close"].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
-            price = round(float(df["Close"].iloc[-1]), 2)
-            bias = "BULLISH 📈" if rsi > 50 else "BEARISH 📉"
-            summary += f"**{item['name']} (`{item['ticker']}`)** | Price: `£{price}` | RSI: `{rsi}` | Bias: **{bias}**\n"
+        try:
+            t = yf.Ticker(item["ticker"])
+            df = t.history(period="1mo", interval="1d")
+            if not df.empty and len(df) >= 15:
+                delta = df["Close"].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                rs = gain / loss
+                rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
+                price = round(float(df["Close"].iloc[-1]), 2)
+                bias = "BULLISH 📈" if rsi > 50 else "BEARISH 📉"
+                summary += f"**{item['name']} (`{item['ticker']}`)** | Price: `£{price}` | RSI: `{rsi}` | Bias: **{bias}**\n"
+        except Exception as e:
+            print(f"⚠️ Error fetching {item['ticker']}: {repr(e)}")
 
     payload = {
         "username": "UK Morning Dynamic Scanner",
@@ -57,7 +62,7 @@ def run_uk_morning_scan():
     print("--> UK Morning Watchlist posted to Discord successfully!")
 
 # ==========================================
-# 🇺🇸 US AFTERNOON VALIDATION LOGIC (15:00 PM UK)
+# 🇺🇸 US AFTERNOON VALIDATION & AI ENGINE (15:00 PM UK)
 # ==========================================
 US_PRIMARY_UNIVERSE = [
     {"ticker": "SPY", "bias": "BULLISH", "ref_price": 580.00},
@@ -81,7 +86,7 @@ BACKUP_UNIVERSE = [
     {"ticker": "SQQQ", "name": "ProShares UltraPro Short QQQ", "type": "Inverse Hedge (-3x)"},
 ]
 
-def fetch_data(ticker: str):
+def fetch_market_data(ticker: str):
     try:
         t = yf.Ticker(ticker)
         df = t.history(period="1mo", interval="1d")
@@ -91,19 +96,94 @@ def fetch_data(ticker: str):
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
+            
             fast = t.fast_info
             price = getattr(fast, 'last_price', None) or fast.get('lastPrice') or df["Close"].iloc[-1]
-            return round(float(price), 2), rsi
+            volume = df["Volume"].iloc[-1]
+            avg_volume = df["Volume"].rolling(window=10).mean().iloc[-1]
+            
+            return round(float(price), 2), rsi, int(volume), int(avg_volume)
     except Exception as e:
         print(f"⚠️ Fetch error for {ticker}: {repr(e)}")
-    return None, 50.0
+    return None, 50.0, 0, 0
+
+def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float):
+    prompt = f"""
+    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown and order flow analysis for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,}.
+    
+    Format your response cleanly using markdown tables and structured sections exactly like this:
+    
+    📊 **Setup Details: ${ticker}**
+    **CONFIDENCE_SCORE: [X]% {bias}**
+    
+    ---
+    
+    **1. Technical & Order Book Confluence**
+    | Factor | Observation | Impact |
+    | :--- | :--- | :--- |
+    | **Current Price** | ${price} | Baseline for entry/stop |
+    | **RSI (14-day)** | {rsi} | Technical momentum check |
+    | **Volume / Order Flow** | Volume ratio: {round(volume/avg_volume, 2) if avg_volume > 0 else 1.0}x | Order book liquidity & institutional absorption |
+    | **Recent Catalysts** | Live session price action & sentiment | Market structure reaction |
+    
+    **Synthesis:**
+    [Provide a concise 2-sentence institutional synthesis regarding order book pressure, liquidity traps, and execution readiness.]
+    
+    ---
+    
+    **2. Actionable IG Trade Plan**
+    | Trade Component | Target Level | Notes |
+    | :--- | :--- | :--- |
+    | **Entry Zone** | $[Price] | Optimal fill window |
+    | **Stop-Loss (SL)** | $[Price] | Structural risk boundary |
+    | **Take-Profit (TP)** | $[Price] | Target liquidity objective |
+    """
+
+    engine_used = "Unknown"
+    response_text = ""
+
+    # Attempt 1: Gemini Primary
+    if GEMINI_API_KEY:
+        try:
+            from google import genai
+            client = genai.Client(api_key=GEMINI_API_KEY)
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+            )
+            response_text = response.text
+            engine_used = "Google Gemini (gemini-2.5-flash)"
+        except Exception as e:
+            print(f"⚠️ Gemini failed: {repr(e)}. Falling back to Groq...")
+
+    # Attempt 2: Groq Fallback
+    if not response_text and GROQ_API_KEY:
+        try:
+            from groq import Groq
+            groq_client = Groq(api_key=GROQ_API_KEY)
+            completion = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=700,
+            )
+            response_text = completion.choices[0].message.content
+            engine_used = "Groq (llama-3.3-70b-versatile)"
+        except Exception as e:
+            print(f"⚠️ Groq fallback also failed: {repr(e)}")
+
+    if not response_text:
+        response_text = f"**Analysis:** Price: ${price} | RSI: {rsi} (AI Engine Unavailable)"
+        engine_used = "Offline / Fallback"
+
+    response_text += f"\n\n*Engine: {engine_used}*"
+    return response_text
 
 def run_us_validation():
     print("==================================================")
-    print("  🇺🇸 RUNNING US 3 PM DYNAMIC VALIDATION & SCANNER")
+    print("  🇺🇸 RUNNING US 3 PM DYNAMIC VALIDATION & INSTITUTIONAL ENGINE")
     print("==================================================")
     
-    results_summary = ""
     confirmed_count = 0
 
     for item in US_PRIMARY_UNIVERSE:
@@ -111,52 +191,56 @@ def run_us_validation():
         bias = item["bias"]
         ref_price = item["ref_price"]
 
-        live_price, rsi = fetch_data(ticker)
+        live_price, rsi, volume, avg_volume = fetch_market_data(ticker)
         if not live_price:
             continue
 
         pct_change = round(((live_price - ref_price) / ref_price) * 100, 2)
-        
-        if bias == "BEARISH":
-            if rsi < 30: status, reason = "INVALIDATED ❌", f"RSI oversold ({rsi}). Squeeze risk."
-            elif live_price > (ref_price * 1.02): status, reason = "INVALIDATED ❌", f"Broke resistance (+{pct_change}%)."
-            elif live_price < (ref_price * 0.98): status, reason = "EXPIRED / MISSED ⚠️", f"Target hit (-{pct_change}%)."
-            else: status, reason = "CONFIRMED ✅", f"Price (${live_price}, {pct_change}%) & RSI intact."
-        else: # BULLISH
-            if rsi > 70: status, reason = "INVALIDATED ❌", f"RSI overbought ({rsi}). Pullback risk."
-            elif live_price < (ref_price * 0.98): status, reason = "INVALIDATED ❌", f"Broke support (-{abs(pct_change)}%)."
-            elif live_price > (ref_price * 1.02): status, reason = "EXPIRED / MISSED ⚠️", f"Move triggered (+{pct_change}%)."
-            else: status, reason = "CONFIRMED ✅", f"Price (${live_price}, {pct_change}%) & RSI intact."
+        is_valid = True
 
-        if "CONFIRMED ✅" in status:
+        if bias == "BEARISH" and (rsi < 30 or live_price > (ref_price * 1.02)):
+            is_valid = False
+        elif bias == "BULLISH" and (rsi > 70 or live_price < (ref_price * 0.98)):
+            is_valid = False
+
+        if is_valid:
             confirmed_count += 1
+            print(f"✅ ${ticker} CONFIRMED. Running AI & Order Flow Deep Dive...")
+            analysis_text = generate_ai_analysis(ticker, bias, live_price, rsi, volume, avg_volume)
 
-        results_summary += f"**${ticker} ({bias})** | `{status}`\n• Ref: ${ref_price} | Live: ${live_price} | RSI: {rsi}\n• **Verdict:** {reason}\n\n"
-
-    primary_payload = {
-        "username": "US 3PM Execution Validator",
-        "embeds": [{
-            "title": "🇺🇸 US Equities 3 PM Session Validation",
-            "description": results_summary,
-            "color": 65280 if confirmed_count > 0 else 16711680,
-            "footer": {"text": f"Validated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Confirmed: {confirmed_count}/10"}
-        }]
-    }
-    requests.post(DISCORD_WEBHOOK_URL, json=primary_payload)
+            payload = {
+                "username": "AI Quant Execution Engine",
+                "content": analysis_text
+            }
+            requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        else:
+            print(f"❌ ${ticker} invalidated or swept by opening bell.")
 
     # All-Red Contingency Protocol Trigger
     if confirmed_count == 0:
-        print("🚨 ALL-RED PROTOCOL ACTIVATED: Sweeping alternative backup universe...")
+        print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero primary setups confirmed. Running dynamic backup scan...")
         scanned_backups = []
         for backup in BACKUP_UNIVERSE:
-            b_price, b_rsi = fetch_data(backup["ticker"])
+            b_price, b_rsi, _, _ = fetch_market_data(backup["ticker"])
             if b_price:
-                scanned_backups.append({"ticker": backup["ticker"], "name": backup["name"], "type": backup["type"], "price": b_price, "rsi": b_rsi})
+                scanned_backups.append({
+                    "ticker": backup["ticker"],
+                    "name": backup["name"],
+                    "type": backup["type"],
+                    "price": b_price,
+                    "rsi": b_rsi
+                })
 
         top_3 = scanned_backups[:3]
-        backup_summary = "⚠️ **Market Regime Warning: 10/10 Primary Setups Invalidated.**\nDynamic scanner surfaced top live alternatives:\n\n"
+        backup_summary = (
+            "⚠️ **Market Regime Warning: 10/10 Primary Setups Invalidated.**\n"
+            "The dynamic scanner has swept alternative asset classes and surfaced top live hedges:\n\n"
+        )
         for asset in top_3:
-            backup_summary += f"🛡️ **${asset['ticker']}** ({asset['name']})\n• Type: `{asset['type']}` | Price: `${asset['price']}` | RSI: `{asset['rsi']}`\n\n"
+            backup_summary += (
+                f"🛡️ **${asset['ticker']}** ({asset['name']})\n"
+                f"• Type: `{asset['type']}` | Price: `${asset['price']}` | RSI: `{asset['rsi']}`\n\n"
+            )
 
         backup_payload = {
             "username": "US Dynamic Contingency Scanner",
@@ -168,10 +252,12 @@ def run_us_validation():
             }]
         }
         requests.post(DISCORD_WEBHOOK_URL, json=backup_payload)
+        print("--> Contingency backup alert dispatched to Discord successfully!")
+    else:
+        print(f"--> Scan complete. {confirmed_count} confirmed setup(s) processed through institutional pipeline.")
 
 if __name__ == "__main__":
     current_hour = datetime.utcnow().hour
-    # Routing: If before 12:00 UTC, run UK Morning Scan. If 12:00 UTC or later, run US 3 PM Validation.
     if current_hour < 12:
         run_uk_morning_scan()
     else:
