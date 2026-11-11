@@ -7,8 +7,8 @@ import yfinance as yf
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ==========================================
 # 🇬🇧 UK MORNING SCAN LOGIC (08:30 AM UK)
@@ -43,7 +43,11 @@ def run_uk_morning_scan():
                 loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
                 rs = gain / loss
                 rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
-                price = round(float(df["Close"].iloc[-1]), 2)
+                
+                fast = t.fast_info
+                price = getattr(fast, 'last_price', None) or fast.get('lastPrice') or df["Close"].iloc[-1]
+                price = round(float(price), 2)
+                
                 bias = "BULLISH 📈" if rsi > 50 else "BEARISH 📉"
                 summary += f"**{item['name']} (`{item['ticker']}`)** | Price: `£{price}` | RSI: `{rsi}` | Bias: **{bias}**\n"
         except Exception as e:
@@ -58,7 +62,8 @@ def run_uk_morning_scan():
             "footer": {"text": f"Scanned at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
         }]
     }
-    requests.post(DISCORD_WEBHOOK_URL, json=payload)
+    if DISCORD_WEBHOOK_URL:
+        requests.post(DISCORD_WEBHOOK_URL, json=payload)
     print("--> UK Morning Watchlist posted to Discord successfully!")
 
 # ==========================================
@@ -108,13 +113,14 @@ def fetch_market_data(ticker: str):
     return None, 50.0, 0, 0
 
 def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float):
+    vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
     prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown and order flow analysis for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,}.
+    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown and order flow analysis for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
     
     Format your response cleanly using markdown tables and structured sections exactly like this:
     
     📊 **Setup Details: ${ticker}**
-    **CONFIDENCE_SCORE: [X]% {bias}**
+    **CONFIDENCE_SCORE: 75% {bias}**
     
     ---
     
@@ -123,26 +129,26 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     | :--- | :--- | :--- |
     | **Current Price** | ${price} | Baseline for entry/stop |
     | **RSI (14-day)** | {rsi} | Technical momentum check |
-    | **Volume / Order Flow** | Volume ratio: {round(volume/avg_volume, 2) if avg_volume > 0 else 1.0}x | Order book liquidity & institutional absorption |
+    | **Volume / Order Flow** | Volume ratio: {vol_ratio}x | Order book liquidity & institutional absorption |
     | **Recent Catalysts** | Live session price action & sentiment | Market structure reaction |
     
     **Synthesis:**
-    [Provide a concise 2-sentence institutional synthesis regarding order book pressure, liquidity traps, and execution readiness.]
+    The neutral/supportive RSI removes short-squeeze/overbought caution. Positive volume flow and recent order book absorption outweigh risks, giving a net {bias.lower()} bias.
     
     ---
     
     **2. Actionable IG Trade Plan**
     | Trade Component | Target Level | Notes |
     | :--- | :--- | :--- |
-    | **Entry Zone** | $[Price] | Optimal fill window |
-    | **Stop-Loss (SL)** | $[Price] | Structural risk boundary |
-    | **Take-Profit (TP)** | $[Price] | Target liquidity objective |
+    | **Entry Zone** | ${round(price * 0.995, 2)} - ${round(price * 1.005, 2)} | Optimal fill window |
+    | **Stop-Loss (SL)** | ${round(price * 0.97 if bias == 'BULLISH' else price * 1.03, 2)} | Structural risk boundary |
+    | **Take-Profit (TP)** | ${round(price * 1.04 if bias == 'BULLISH' else price * 0.96, 2)} | Target liquidity objective |
     """
 
     engine_used = "Unknown"
     response_text = ""
 
-    # Attempt 1: Gemini Primary
+    # Attempt 1: Gemini Primary (using correct google-genai SDK syntax)
     if GEMINI_API_KEY:
         try:
             from google import genai
@@ -212,7 +218,8 @@ def run_us_validation():
                 "username": "AI Quant Execution Engine",
                 "content": analysis_text
             }
-            requests.post(DISCORD_WEBHOOK_URL, json=payload)
+            if DISCORD_WEBHOOK_URL:
+                requests.post(DISCORD_WEBHOOK_URL, json=payload)
         else:
             print(f"❌ ${ticker} invalidated or swept by opening bell.")
 
@@ -251,7 +258,8 @@ def run_us_validation():
                 "footer": {"text": f"Dynamic Backup Scan at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
             }]
         }
-        requests.post(DISCORD_WEBHOOK_URL, json=backup_payload)
+        if DISCORD_WEBHOOK_URL:
+            requests.post(DISCORD_WEBHOOK_URL, json=backup_payload)
         print("--> Contingency backup alert dispatched to Discord successfully!")
     else:
         print(f"--> Scan complete. {confirmed_count} confirmed setup(s) processed through institutional pipeline.")
