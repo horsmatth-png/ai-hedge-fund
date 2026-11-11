@@ -2,9 +2,9 @@ name: Two-Stage Quant Engine
 
 on:
   schedule:
-    - cron: '15 8 * * 1-5'
-    - cron: '03 15 * * 1-5'
-  workflow_dispatch:
+    - cron: '15 8 * * 1-5'   # Runs 08:15 AM UK (Morning Watchlist)
+    - cron: '03 15 * * 1-5'  # Runs 15:03 PM UK (3 PM Re-Validation)
+  workflow_dispatch:         # Allows manual execution anytime via GitHub UI/App
 
 jobs:
   run-engine:
