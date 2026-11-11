@@ -153,10 +153,10 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-1.5-flash')
             response = model.generate_content(prompt)
             response_text = response.text
-            engine_used = "Google Gemini (gemini-2.5-flash)"
+            engine_used = "Google Gemini (gemini-1.5-flash)"
         except Exception as e:
             print(f"⚠️ Gemini failed: {repr(e)}")
 
