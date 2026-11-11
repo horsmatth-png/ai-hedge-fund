@@ -123,11 +123,6 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     
     Format your response cleanly using markdown tables and structured sections exactly like this:
     
-    📊 **Setup Details: ${ticker}**
-    **CONFIDENCE_SCORE: 75% {bias}**
-    
-    ---
-    
     **1. Technical & Order Book Confluence**
     | Factor | Observation | Impact |
     | :--- | :--- | :--- |
@@ -140,8 +135,6 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     
     **Synthesis:**
     The neutral/supportive RSI removes short-squeeze/overbought caution. Positive volume flow and recent order book absorption outweigh risks, giving a net {bias.lower()} bias.
-    
-    ---
     
     **2. Actionable IG Trade Plan**
     | Trade Component | Target Level | Notes |
@@ -188,7 +181,19 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         engine_used = "Offline / Fallback"
 
     response_text += f"\n\n*Engine: {engine_used}*"
-    return response_text
+    
+    # Determine color stripe based on bias (Green for Bullish = 3066993, Red for Bearish = 15158332)
+    embed_color = 3066993 if bias == "BULLISH" else 15158332
+
+    return {
+        "username": "AI Quant Execution Engine",
+        "embeds": [{
+            "title": f"📊 Setup Details: ${ticker} (75% Conf.)",
+            "description": f"**CONFIDENCE_SCORE: 75% {bias}**\n\n---\n\n{response_text}",
+            "color": embed_color,
+            "footer": {"text": f"Validated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Engine: {engine_used}"}
+        }]
+    }
 
 def run_us_validation():
     print("==================================================")
@@ -216,15 +221,11 @@ def run_us_validation():
 
         if is_valid:
             confirmed_count += 1
-            print(f"✅ ${ticker} CONFIRMED. Running AI & Order Flow Deep Dive...")
-            analysis_text = generate_ai_analysis(ticker, bias, live_price, rsi, volume, avg_volume)
+            print(f"✅ ${ticker} CONFIRMED. Dispatching Rich Embed to Discord...")
+            embed_payload = generate_ai_analysis(ticker, bias, live_price, rsi, volume, avg_volume)
 
-            payload = {
-                "username": "AI Quant Execution Engine",
-                "content": analysis_text
-            }
             if DISCORD_WEBHOOK_URL:
-                requests.post(DISCORD_WEBHOOK_URL, json=payload)
+                requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
         else:
             print(f"❌ ${ticker} invalidated or swept by opening bell.")
 
