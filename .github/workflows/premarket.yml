@@ -1,10 +1,10 @@
-name: Two-Stage Quant Engine
+name: Multi-Region Quant Engine
 
 on:
   schedule:
-    - cron: '15 8 * * 1-5'   # Runs 08:15 AM UK (Morning Watchlist)
-    - cron: '03 15 * * 1-5'  # Runs 15:03 PM UK (3 PM Re-Validation)
-  workflow_dispatch:         # Allows manual execution anytime via GitHub UI/App
+    - cron: '15 8 * * 1-5'   # 08:15 AM UK: Runs UK Morning Scan (main_pipeline.py)
+    - cron: '03 15 * * 1-5'  # 15:03 PM UK: Runs US 3 PM Validation (validate_3pm.py)
+  workflow_dispatch:         # Allows manual testing anytime via GitHub App
 
 jobs:
   run-engine:
@@ -23,11 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance requests python-dotenv edgar google-genai groq
 
-      - name: Run Pipeline Script
+      - name: Route Regional Pipeline
         env:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python -c "import datetime; h = datetime.datetime.utcnow().hour; print(f'Current UTC Hour: {h}'); import subprocess; subprocess.run(['python', 'main_pipeline.py' if h < 12 else 'validate_3pm.py'])"
+          python -c "import datetime; h = datetime.datetime.utcnow().hour; print(f'Current UTC Hour: {h}'); import subprocess; script = 'main_pipeline.py' if h < 12 else 'validate_3pm.py'; print(f'Executing: {script}'); subprocess.run(['python', script])"
