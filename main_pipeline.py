@@ -148,7 +148,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     engine_used = "Unknown"
     response_text = ""
 
-    # Attempt 1: Gemini Primary (using active gemini-2.5-flash)
+    # Attempt 1: Gemini Primary
     if GEMINI_API_KEY:
         try:
             import google.generativeai as genai
@@ -158,24 +158,23 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
             response_text = response.text
             engine_used = "Google Gemini (gemini-2.5-flash)"
         except Exception as e:
-            print(f"⚠️ GEMINI ERROR FOR {ticker}: {repr(e)}")
+            print(f"⚠️ Gemini failed: {repr(e)}")
 
-    # Attempt 2: Groq Fallback (using active openai/gpt-oss-120b)
+    # Attempt 2: Groq Fallback
     if not response_text and GROQ_API_KEY:
         try:
             from groq import Groq
             groq_client = Groq(api_key=GROQ_API_KEY)
             completion = groq_client.chat.completions.create(
-                model="openai/gpt-oss-120b",
+                model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=800,
-                reasoning_effort="low"
             )
             response_text = completion.choices[0].message.content
-            engine_used = "Groq (openai/gpt-oss-120b)"
+            engine_used = "Groq (llama-3.3-70b-versatile)"
         except Exception as e:
-            print(f"⚠️ GROQ ERROR FOR {ticker}: {repr(e)}")
+            print(f"⚠️ Groq failed: {repr(e)}")
 
     if not response_text:
         response_text = f"**Analysis:** Price: ${price} | RSI: {rsi} (AI Engine Unavailable)"
