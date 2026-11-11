@@ -148,17 +148,15 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     engine_used = "Unknown"
     response_text = ""
 
-    # Attempt 1: Gemini Primary (using correct google-genai SDK syntax)
+    # Attempt 1: Gemini Primary (using google-generativeai)
     if GEMINI_API_KEY:
         try:
-            from google import genai
-            client = genai.Client(api_key=GEMINI_API_KEY)
-            response = client.models.generate_content(
-                model='gemini-2.5-flash',
-                contents=prompt,
-            )
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
             response_text = response.text
-            engine_used = "Google Gemini (gemini-2.5-flash)"
+            engine_used = "Google Gemini (gemini-1.5-flash)"
         except Exception as e:
             print(f"⚠️ Gemini failed: {repr(e)}. Falling back to Groq...")
 
