@@ -160,19 +160,19 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         except Exception as e:
             print(f"⚠️ Gemini failed: {repr(e)}")
 
-    # Attempt 2: Groq Fallback
+    # Attempt 2: Groq Fallback (Restored to working model)
     if not response_text and GROQ_API_KEY:
         try:
             from groq import Groq
             groq_client = Groq(api_key=GROQ_API_KEY)
             completion = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
                 max_tokens=800,
             )
             response_text = completion.choices[0].message.content
-            engine_used = "Groq (llama-3.3-70b-versatile)"
+            engine_used = "Groq (openai/gpt-oss-20b)"
         except Exception as e:
             print(f"⚠️ Groq failed: {repr(e)}")
 
