@@ -23,20 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install yfinance requests python-dotenv edgar google-genai groq
 
-      - name: Determine Run Mode (Morning vs 3 PM Validation)
+      - name: Run Pipeline Script
         env:
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          HOUR=$(date -u +%H)
-          echo "Current UTC Hour: $HOUR"
-          
-          if [ "$HOUR" -eq "8" ] || [ "$HOUR" -eq "08" ]; then
-            echo "Running 08:15 AM Morning Preparation Scan..."
-            python main_pipeline.py
-          else
-            echo "Running 15:00 PM Re-Validation Engine..."
-            python validate_3pm.py
-          fi
+          python -c "import datetime; h = datetime.datetime.utcnow().hour; print(f'Current UTC Hour: {h}'); import subprocess; subprocess.run(['python', 'main_pipeline.py' if h < 12 else 'validate_3pm.py'])"
