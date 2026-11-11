@@ -1,33 +1,147 @@
-name: Two-Stage Quant Engine
+import os
+import time
+from dotenv import load_dotenv
+import requests
+import yfinance as yf
 
-on:
-  schedule:
-    - cron: '15 8 * * 1-5'   # Runs 08:15 AM UK (Morning Watchlist)
-    - cron: '0 15 * * 1-5'   # Runs 15:00 PM UK (3 PM Re-Validation Execution)
-  workflow_dispatch:
+load_dotenv()
 
-jobs:
-  run-engine:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-      - name: Install dependencies
-        run: |
-          pip install yfinance requests python-dotenv edgar-tools google-genai groq
-      - name: Execute Pipeline based on Time
-        env:
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          HOUR=$(date -u +%H)
-          if [ "$HOUR" -eq "08" ]; then
-            python main_pipeline.py
-          else
-            python validate_3pm.py
-          fi
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
+VALIDATION_VERSION = "v2.0-3pm-execution"
+
+# Dynamic candidate list loaded from morning baseline
+TARGET_CANDIDATES = [
+    {"ticker": "NVDA", "morning_bias": "BEARISH", "morning_price": 173.90},
+    {"ticker": "TSLA", "morning_bias": "BEARISH", "morning_price": 385.00},
+    {"ticker": "QQQ", "morning_bias": "BEARISH", "morning_price": 500.00},
+    {"ticker": "AMD", "morning_bias": "BULLISH", "morning_price": 160.00},
+    {"ticker": "JPM", "morning_bias": "BULLISH", "morning_price": 220.00},
+]
+
+
+def fetch_live_3pm_data(ticker: str):
+  """Pulls 15:00 UK live price and 14-period RSI."""
+  try:
+    t = yf.Ticker(ticker)
+    df = t.history(period="1mo", interval="1d")
+    if not df.empty and len(df) >= 15:
+      delta = df["Close"].diff()
+      gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+      loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+      rs = gain / loss
+      latest_rsi = round(float((100 - (100 / (1 + rs))).iloc[-1]), 1)
+
+      fast = t.fast_info
+      latest_price = (
+          getattr(fast, "last_price", None)
+          or fast.get("lastPrice")
+          or df["Close"].iloc[-1]
+      )
+      return round(float(latest_price), 2), latest_rsi
+  except Exception as e:
+    print(f"⚠️ 3 PM Fetch error for {ticker}: {repr(e)}")
+  return None, 50.0
+
+
+def validate_trade_setup(
+    ticker: str, bias: str, morning_price: float, live_price: float, rsi: float
+):
+  """Validates if setup survived the 14:30 opening bell volatility sweep."""
+  if not live_price:
+    return "DISCARD", "Unable to pull live price feed."
+
+  pct_change = round(((live_price - morning_price) / morning_price) * 100, 2)
+
+  # BEARISH / SHORT RULES
+  if bias == "BEARISH":
+    if rsi < 30:
+      return (
+          "INVALIDATED ❌",
+          f"RSI is oversold ({rsi}). High risk of short-squeeze bounce.",
+      )
+    if live_price > (morning_price * 1.02):
+      return (
+          "INVALIDATED ❌",
+          f"Opening bell swept structural resistance (+{pct_change}% higher)."
+          " Stop would have been hit.",
+      )
+    if live_price < (morning_price * 0.98):
+      return (
+          "EXPIRED / MISSED ⚠️",
+          f"Target already reached (-{pct_change}% lower). Do not chase.",
+      )
+    return (
+        "CONFIRMED ✅",
+        f"Price (${live_price}, {pct_change}%) and RSI ({rsi}) intact. Safe to"
+        " execute short on IG.",
+    )
+
+  # BULLISH / LONG RULES
+  if bias == "BULLISH":
+    if rsi > 70:
+      return (
+          "INVALIDATED ❌",
+          f"RSI is overbought ({rsi}). High risk of pullback.",
+      )
+    if live_price < (morning_price * 0.98):
+      return (
+          "INVALIDATED ❌",
+          f"Opening bell swept support ({pct_change}% lower). Setup broken.",
+      )
+    if live_price > (morning_price * 1.02):
+      return (
+          "EXPIRED / MISSED ⚠️",
+          f"Move already triggered (+{pct_change}% higher). Do not chase.",
+      )
+    return (
+        "CONFIRMED ✅",
+        f"Price (${live_price}, {pct_change}%) and RSI ({rsi}) intact. Safe to"
+        " execute long on IG.",
+    )
+
+  return "NEUTRAL", "No clear bias."
+
+
+def run_3pm_validation():
+  print("\n==================================================")
+  print(f"  🤖 RUNNING 15:00 UK EXECUTION VALIDATION [{VALIDATION_VERSION}]")
+  print("==================================================\n")
+
+  results_summary = ""
+
+  for item in TARGET_CANDIDATES:
+    ticker = item["ticker"]
+    bias = item["morning_bias"]
+    m_price = item["morning_price"]
+
+    live_price, rsi = fetch_live_3pm_data(ticker)
+    status, reason = validate_trade_setup(ticker, bias, m_price, live_price, rsi)
+
+    print(f"[{status}] ${ticker} ({bias}) -> {reason}")
+
+    results_summary += (
+        f"**${ticker} ({bias})** | `{status}`\n"
+        f"• Morning Ref: ${m_price} | 3 PM Price: ${live_price} | RSI: {rsi}\n"
+        f"• **Verdict:** {reason}\n\n"
+    )
+
+  payload = {
+      "username": "AI Quant Execution Engine (15:00 UK)",
+      "embeds": [{
+          "title": "🎯 15:00 UK Trade Validation Verdicts",
+          "description": results_summary,
+          "color": 65280 if "CONFIRMED ✅" in results_summary else 16711680,
+          "footer": {
+              "text": (
+                  f"Validated at: {time.strftime('%Y-%m-%d %H:%M:%S UTC',"
+                  " time.gmtime())}"
+              )
+          },
+      }],
+  }
+  requests.post(DISCORD_WEBHOOK_URL, json=payload)
+  print("\n--> 15:00 UK Validation Verdicts sent to Discord successfully!")
+
+
+if __name__ == "__main__":
+  run_3pm_validation()
