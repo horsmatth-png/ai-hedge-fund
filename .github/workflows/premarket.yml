@@ -1,10 +1,10 @@
-name: Multi-Region Quant Engine
+name: Global Dual-Stage Quant Engine
 
 on:
   schedule:
-    - cron: '15 8 * * 1-5'   # 08:15 AM UK: Runs UK Morning Scan (main_pipeline.py)
-    - cron: '03 15 * * 1-5'  # 15:03 PM UK: Runs US 3 PM Validation (validate_3pm.py)
-  workflow_dispatch:         # Allows manual testing anytime via GitHub App
+    - cron: '30 7 * * 1-5'   # 07:30 UTC = 08:30 AM UK (BST is UTC+1, or GMT is UTC+0 depending on time of year)
+    - cron: '00 14 * * 1-5'  # 14:00 UTC = 15:00 PM UK (Accounting for UK clock standard)
+  workflow_dispatch:         # Allows manual execution anytime
 
 jobs:
   run-engine:
@@ -21,13 +21,10 @@ jobs:
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install yfinance requests python-dotenv edgar google-genai groq
+          pip install yfinance requests python-dotenv
 
-      - name: Route Regional Pipeline
+      - name: Execute Regional Pipeline
         env:
-          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python -c "import datetime; h = datetime.datetime.utcnow().hour; print(f'Current UTC Hour: {h}'); import subprocess; script = 'main_pipeline.py' if h < 12 else 'validate_3pm.py'; print(f'Executing: {script}'); subprocess.run(['python', script])"
+          python main_pipeline.py
