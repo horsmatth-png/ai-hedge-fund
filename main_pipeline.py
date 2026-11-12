@@ -19,39 +19,56 @@ UK_WATCH_UNIVERSE = [
     "BARC.L", "VOD.L", "GLEN.L", "NG.L", "RR.L"
 ]
 
-def generate_uk_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float):
+def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float, region: str = "US"):
     vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+    vwap_approx = round(price * 1.0005, 2)
     support = round(price * 0.98, 2)
     resistance = round(price * 1.02, 2)
+    
+    currency = "£" if region == "UK" else "$"
+    market_context = "FTSE 100 institutional rotation & London session order flow" if region == "UK" else "QQQ & SPY trending higher; US session institutional demand"
+    
+    entry_low = round(price * 0.995, 2)
+    entry_high = round(price * 1.005, 2)
+    sl_price = round(price * 0.97 if bias == "BULLISH" else price * 1.03, 2)
+    tp_price = round(price * 1.04 if bias == "BULLISH" else price * 0.96, 2)
+    
+    sl_pts = int(abs(price - sl_price) * 100)
+    tp_pts = int(abs(tp_price - price) * 100)
 
     prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown, news confluence, order flow analysis, and IG trade plan for UK equity {ticker} currently trading at £{price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
+    You are an elite quantitative hedge fund execution engine. Provide a concise, high-density institutional trade breakdown and IG trade plan for {ticker} trading at {currency}{price} (14-day RSI: {rsi}, Bias: {bias}, Volume Ratio: {vol_ratio}x).
     
-    Format your response cleanly using markdown tables and structured sections exactly like this:
+    Keep table cells concise so the entire response fits cleanly without truncation. Use this exact structure:
     
     **1. Technical & News Confluence**
     | Factor | Observation | Impact |
     | :--- | :--- | :--- |
-    | **Current Price** | £{price} | Baseline for entry/stop |
-    | **RSI (14-day)** | {rsi} | Neutral / momentum check |
-    | **Sector Momentum** | FTSE 100 institutional rotation | Supports directional bias |
-    | **Recent Catalysts** | London session price action & earnings flow | Micro-structure reaction |
-    | **Insider / Regulatory** | Clean compliance & transparent reporting | No immediate legal headwinds |
+    | **Current Price** | {currency}{price} | Baseline for entry/stop |
+    | **RSI (14-day)** | {rsi} | Neutral/momentum check; supports {bias.lower()} stance |
+    | **Sector Momentum** | {market_context} | Supports directional bias |
+    | **Recent Catalysts** | Live session price action & volume ({vol_ratio}x avg) | Positive micro-structure reaction |
+    | **VWAP & S/R** | VWAP: {currency}{vwap_approx} | S: {currency}{support} / R: {currency}{resistance} | Key intraday boundary levels |
+    | **Insider / Regulatory** | Standard institutional flow; no legal/regulatory flags | Downside risk minimized |
     
     **Synthesis:**
-    The RSI profile and institutional volume absorption remove short-term squeeze risks, supporting a net {bias.lower()} stance across the London session.
+    The RSI profile removes immediate squeeze/overbought caution. Sector momentum and order flow absorption outweigh risks, giving a net {bias.lower()} bias.
+    
+    ---
     
     **2. Actionable IG Trade Plan**
-    | Trade Component | Target | IG Point Distance (1£ = 100 pts) | Notes |
+    | Trade Component | Target | IG Point Distance (1{currency} = 100 pts) | Notes |
     | :--- | :--- | :--- | :--- |
-    | **Entry Zone** | £{round(price * 0.995, 2)} - £{round(price * 1.005, 2)} | ±50 pts | Optimal fill window |
-    | **Stop-Loss (SL)** | £{round(price * 0.97 if 'BULLISH' in bias else price * 1.03, 2)} | Structural risk boundary | Protection against breakout failure |
-    | **Take-Profit (TP)** | £{round(price * 1.04 if 'BULLISH' in bias else price * 0.96, 2)} | Liquidity objective | Target resistance/support |
+    | **Entry Zone** | {currency}{entry_low} - {currency}{entry_high} | ±50 pts | Optimal fill window |
+    | **Stop-Loss (SL)** | {currency}{sl_price} | {sl_pts} pts | Structural risk boundary |
+    | **Take-Profit (TP)** | {currency}{tp_price} | {tp_pts} pts | Primary liquidity objective |
+    | **Position Size** | 1,500 units | ~1.5% Portfolio Risk | Institutional allocation |
     """
 
     engine_used = "Unknown"
     response_text = ""
 
+    # Attempt 1: Gemini Primary
     if GEMINI_API_KEY:
         try:
             import google.generativeai as genai
@@ -63,6 +80,7 @@ def generate_uk_ai_analysis(ticker: str, bias: str, price: float, rsi: float, vo
         except Exception as e:
             print(f"⚠️ Gemini failed: {repr(e)}")
 
+    # Attempt 2: Groq Fallback (Increased max_tokens to prevent cut-off)
     if not response_text and GROQ_API_KEY:
         try:
             from groq import Groq
@@ -71,7 +89,7 @@ def generate_uk_ai_analysis(ticker: str, bias: str, price: float, rsi: float, vo
                 model="openai/gpt-oss-20b",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=900,
+                max_tokens=1500,
             )
             response_text = completion.choices[0].message.content
             engine_used = "Groq (openai/gpt-oss-20b)"
@@ -79,19 +97,21 @@ def generate_uk_ai_analysis(ticker: str, bias: str, price: float, rsi: float, vo
             print(f"⚠️ Groq failed: {repr(e)}")
 
     if not response_text:
-        response_text = f"**Analysis:** Price: £{price} | RSI: {rsi} (AI Engine Unavailable)"
+        response_text = f"**Analysis:** Price: {currency}{price} | RSI: {rsi} (AI Engine Unavailable)"
         engine_used = "Offline / Fallback"
 
-    response_text += f"\n\n*Engine: {engine_used}*"
-    embed_color = 3066993 if "BULLISH" in bias else 15158332
+    response_text += f"\n\n🤖 *Engine: {engine_used}*"
+    embed_color = 3066993 if bias == "BULLISH" else 15158332
+    bot_name = "UK Dynamic Quant Engine" if region == "UK" else "AI Quant Execution Engine"
+    prefix = "UK Setup Details:" if region == "UK" else "Setup Details: $"
 
     return {
-        "username": "UK Dynamic Quant Engine",
+        "username": bot_name,
         "embeds": [{
-            "title": f"📊 UK Setup Details: {ticker} (75% Conf.)",
-            "description": f"**CONFIDENCE_SCORE: 75% {bias}**\n\n---\n\n{response_text}",
+            "title": f"📊 {prefix}{ticker} (75% Conf.)",
+            "description": f"**CONFIDENCE_SCORE: 75% {bias}**\n\n---\n\n{response_text[:3900]}",
             "color": embed_color,
-            "footer": {"text": f"Scanned at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Engine: {engine_used}"}
+            "footer": {"text": f"{'Scanned' if region == 'UK' else 'Validated'} at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Engine: {engine_used}"}
         }]
     }
 
@@ -133,14 +153,13 @@ def run_uk_morning_scan():
         except Exception as e:
             print(f"⚠️ Error scanning {ticker}: {repr(e)}")
 
-    # Sort by volume ratio and take top 2 actionable picks for deep AI dives
     scanned_results.sort(key=lambda x: x["vol_ratio"], reverse=True)
-    top_picks = scanned_results[:2]
+    top_picks = scanned_results[:3]
 
     for item in top_picks:
-        print(f"✅ UK Top Pick: {item['ticker']} ({item['bias']}). Generating AI Deep Dive...")
-        embed_payload = generate_uk_ai_analysis(
-            item["ticker"], item["bias"], item["price"], item["rsi"], item["volume"], item["avg_volume"]
+        print(f"✅ UK Top Pick: {item['ticker']} ({item['bias']}). Generating Full IG Trade Execution...")
+        embed_payload = generate_ai_analysis(
+            item["ticker"], item["bias"], item["price"], item["rsi"], item["volume"], item["avg_volume"], region="UK"
         )
         if DISCORD_WEBHOOK_URL:
             requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
@@ -191,84 +210,6 @@ def fetch_market_data(ticker: str):
         print(f"⚠️ Fetch error for {ticker}: {repr(e)}")
     return None, 50.0, 0, 0
 
-def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float):
-    vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
-    vwap_approx = round(price * 1.0005, 2)
-    support = round(price * 0.98, 2)
-    resistance = round(price * 1.02, 2)
-
-    prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown, news confluence, sector momentum, insider activity, and IG trade plan for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
-    
-    Format your response cleanly using markdown tables and structured sections exactly like this:
-    
-    **1. Technical & News Confluence**
-    | Factor | Observation | Impact |
-    | :--- | :--- | :--- |
-    | **Current Price** | ${price} | Baseline for entry/stop |
-    | **RSI (14-day)** | {rsi} | Neutral - no overbought/oversold bias; allows full-confidence bullish stance |
-    | **Sector Momentum** | QQQ & SPY trending higher; chip/tech rally driven by institutional demand | Supports upside bias |
-    | **Recent Catalysts** | Live session price action & earnings sentiment | Positive micro-structure reaction |
-    | **Insider Activity** | Standard institutional portfolio rebalancing | No immediate regulatory risk disclosed |
-    | **Regulatory / Legal** | No current investigations or scandals reported | Additional downside risk minimized |
-    
-    **Synthesis:**
-    The neutral RSI removes any short-squeeze or overbought caution. Positive sector momentum and recent catalysts outweigh risks, giving a net {bias.lower()} bias.
-    
-    **2. Actionable IG Trade Plan**
-    | Trade Component | Target | IG Point Distance (1$ = 100 pts) | Notes |
-    | :--- | :--- | :--- | :--- |
-    | **Entry Zone** | ${round(price * 0.995, 2)} - ${round(price * 1.005, 2)} | ±50 pts | Optimal fill window |
-    | **Stop-Loss (SL)** | ${round(price * 0.97 if bias == 'BULLISH' else price * 1.03, 2)} | Structural risk boundary | Protection against breakout failure |
-    | **Take-Profit (TP)** | ${round(price * 1.04 if bias == 'BULLISH' else price * 0.96, 2)} | Liquidity objective | Target resistance/support |
-    """
-
-    engine_used = "Unknown"
-    response_text = ""
-
-    if GEMINI_API_KEY:
-        try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(prompt)
-            response_text = response.text
-            engine_used = "Google Gemini (gemini-1.5-flash)"
-        except Exception as e:
-            print(f"⚠️ Gemini failed: {repr(e)}")
-
-    if not response_text and GROQ_API_KEY:
-        try:
-            from groq import Groq
-            groq_client = Groq(api_key=GROQ_API_KEY)
-            completion = groq_client.chat.completions.create(
-                model="openai/gpt-oss-20b",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=900,
-            )
-            response_text = completion.choices[0].message.content
-            engine_used = "Groq (openai/gpt-oss-20b)"
-        except Exception as e:
-            print(f"⚠️ Groq failed: {repr(e)}")
-
-    if not response_text:
-        response_text = f"**Analysis:** Price: ${price} | RSI: {rsi} (AI Engine Unavailable)"
-        engine_used = "Offline / Fallback"
-
-    response_text += f"\n\n*Engine: {engine_used}*"
-    embed_color = 3066993 if bias == "BULLISH" else 15158332
-
-    return {
-        "username": "AI Quant Execution Engine",
-        "embeds": [{
-            "title": f"📊 Setup Details: ${ticker} (75% Conf.)",
-            "description": f"**CONFIDENCE_SCORE: 75% {bias}**\n\n---\n\n{response_text}",
-            "color": embed_color,
-            "footer": {"text": f"Validated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Engine: {engine_used}"}
-        }]
-    }
-
 def run_us_validation():
     print("==================================================")
     print("  🇺🇸 RUNNING US 3 PM DYNAMIC VALIDATION & INSTITUTIONAL ENGINE")
@@ -294,7 +235,7 @@ def run_us_validation():
         if is_valid:
             confirmed_count += 1
             print(f"✅ ${ticker} CONFIRMED. Dispatching Rich Embed to Discord...")
-            embed_payload = generate_ai_analysis(ticker, bias, live_price, rsi, volume, avg_volume)
+            embed_payload = generate_ai_analysis(ticker, bias, live_price, rsi, volume, avg_volume, region="US")
 
             if DISCORD_WEBHOOK_URL:
                 requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
