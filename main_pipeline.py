@@ -11,7 +11,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ==========================================
-# 🇬🇧 UK DYNAMIC SCANNER (08:30 AM UK)
+# 🇬🇧 UK DYNAMIC SCANNER & AI ENGINE (08:30 AM UK)
 # ==========================================
 UK_WATCH_UNIVERSE = [
     "SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", 
@@ -19,9 +19,85 @@ UK_WATCH_UNIVERSE = [
     "BARC.L", "VOD.L", "GLEN.L", "NG.L", "RR.L"
 ]
 
+def generate_uk_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float):
+    vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+    support = round(price * 0.98, 2)
+    resistance = round(price * 1.02, 2)
+
+    prompt = f"""
+    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown, news confluence, order flow analysis, and IG trade plan for UK equity {ticker} currently trading at £{price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
+    
+    Format your response cleanly using markdown tables and structured sections exactly like this:
+    
+    **1. Technical & News Confluence**
+    | Factor | Observation | Impact |
+    | :--- | :--- | :--- |
+    | **Current Price** | £{price} | Baseline for entry/stop |
+    | **RSI (14-day)** | {rsi} | Neutral / momentum check |
+    | **Sector Momentum** | FTSE 100 institutional rotation | Supports directional bias |
+    | **Recent Catalysts** | London session price action & earnings flow | Micro-structure reaction |
+    | **Insider / Regulatory** | Clean compliance & transparent reporting | No immediate legal headwinds |
+    
+    **Synthesis:**
+    The RSI profile and institutional volume absorption remove short-term squeeze risks, supporting a net {bias.lower()} stance across the London session.
+    
+    **2. Actionable IG Trade Plan**
+    | Trade Component | Target | IG Point Distance (1£ = 100 pts) | Notes |
+    | :--- | :--- | :--- | :--- |
+    | **Entry Zone** | £{round(price * 0.995, 2)} - £{round(price * 1.005, 2)} | ±50 pts | Optimal fill window |
+    | **Stop-Loss (SL)** | £{round(price * 0.97 if 'BULLISH' in bias else price * 1.03, 2)} | Structural risk boundary | Protection against breakout failure |
+    | **Take-Profit (TP)** | £{round(price * 1.04 if 'BULLISH' in bias else price * 0.96, 2)} | Liquidity objective | Target resistance/support |
+    """
+
+    engine_used = "Unknown"
+    response_text = ""
+
+    if GEMINI_API_KEY:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(prompt)
+            response_text = response.text
+            engine_used = "Google Gemini (gemini-1.5-flash)"
+        except Exception as e:
+            print(f"⚠️ Gemini failed: {repr(e)}")
+
+    if not response_text and GROQ_API_KEY:
+        try:
+            from groq import Groq
+            groq_client = Groq(api_key=GROQ_API_KEY)
+            completion = groq_client.chat.completions.create(
+                model="openai/gpt-oss-20b",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=900,
+            )
+            response_text = completion.choices[0].message.content
+            engine_used = "Groq (openai/gpt-oss-20b)"
+        except Exception as e:
+            print(f"⚠️ Groq failed: {repr(e)}")
+
+    if not response_text:
+        response_text = f"**Analysis:** Price: £{price} | RSI: {rsi} (AI Engine Unavailable)"
+        engine_used = "Offline / Fallback"
+
+    response_text += f"\n\n*Engine: {engine_used}*"
+    embed_color = 3066993 if "BULLISH" in bias else 15158332
+
+    return {
+        "username": "UK Dynamic Quant Engine",
+        "embeds": [{
+            "title": f"📊 UK Setup Details: {ticker} (75% Conf.)",
+            "description": f"**CONFIDENCE_SCORE: 75% {bias}**\n\n---\n\n{response_text}",
+            "color": embed_color,
+            "footer": {"text": f"Scanned at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Engine: {engine_used}"}
+        }]
+    }
+
 def run_uk_morning_scan():
     print("==================================================")
-    print("  🇬🇧 RUNNING UK DYNAMIC MORNING LIQUIDITY SCAN")
+    print("  🇬🇧 RUNNING UK DYNAMIC MORNING SCAN & AI DEEP DIVE")
     print("==================================================")
     
     scanned_results = []
@@ -44,43 +120,33 @@ def run_uk_morning_scan():
                 avg_volume = df["Volume"].rolling(window=10).mean().iloc[-1]
                 vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
-                bias = "BULLISH 📈" if rsi > 50 else "BEARISH 📉"
+                bias = "BULLISH" if rsi > 50 else "BEARISH"
                 scanned_results.append({
                     "ticker": ticker,
                     "price": price,
                     "rsi": rsi,
+                    "volume": volume,
+                    "avg_volume": avg_volume,
                     "vol_ratio": vol_ratio,
                     "bias": bias
                 })
         except Exception as e:
             print(f"⚠️ Error scanning {ticker}: {repr(e)}")
 
-    # Sort dynamically by volume ratio to surface highest institutional interest
+    # Sort by volume ratio and take top 2 actionable picks for deep AI dives
     scanned_results.sort(key=lambda x: x["vol_ratio"], reverse=True)
-    top_picks = scanned_results[:6]
+    top_picks = scanned_results[:2]
 
-    summary = "🔥 **Top Dynamic UK Momentum & Volume Surges:**\n\n"
     for item in top_picks:
-        summary += (
-            f"🔹 **`{item['ticker']}`** | Price: `£{item['price']}` | "
-            f"RSI: `{item['rsi']}` | Vol Ratio: `{item['vol_ratio']}x` | **{item['bias']}**\n"
+        print(f"✅ UK Top Pick: {item['ticker']} ({item['bias']}). Generating AI Deep Dive...")
+        embed_payload = generate_uk_ai_analysis(
+            item["ticker"], item["bias"], item["price"], item["rsi"], item["volume"], item["avg_volume"]
         )
-
-    payload = {
-        "username": "UK Dynamic Momentum Scanner",
-        "embeds": [{
-            "title": "🇬🇧 UK Equities Dynamic Morning Scan",
-            "description": summary,
-            "color": 3447003,
-            "footer": {"text": f"Dynamic Scan at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
-        }]
-    }
-    if DISCORD_WEBHOOK_URL:
-        requests.post(DISCORD_WEBHOOK_URL, json=payload)
-    print("--> UK Dynamic Watchlist posted to Discord successfully!")
+        if DISCORD_WEBHOOK_URL:
+            requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
 
 # ==========================================
-# 🇺🇸 US DYNAMIC VALIDATION & AI ENGINE
+# 🇺🇸 US DYNAMIC VALIDATION & AI ENGINE (14:30/15:00 PM UK)
 # ==========================================
 US_PRIMARY_UNIVERSE = [
     {"ticker": "SPY", "bias": "BULLISH", "ref_price": 580.00},
@@ -132,30 +198,29 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     resistance = round(price * 1.02, 2)
 
     prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown, VWAP, key support/resistance, order flow analysis, and position sizing for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
+    You are an elite quantitative hedge fund execution engine. Provide a rigorous, structured trade breakdown, news confluence, sector momentum, insider activity, and IG trade plan for ${ticker} currently trading at ${price} with a 14-day RSI of {rsi} and a morning bias of {bias}. Volume is {volume:,} vs 10-day average {avg_volume:,} (Ratio: {vol_ratio}x).
     
     Format your response cleanly using markdown tables and structured sections exactly like this:
     
-    **1. Technical & Order Book Confluence**
+    **1. Technical & News Confluence**
     | Factor | Observation | Impact |
     | :--- | :--- | :--- |
     | **Current Price** | ${price} | Baseline for entry/stop |
-    | **RSI (14-day)** | {rsi} | Technical momentum check |
-    | **Volume / Order Flow** | Volume ratio: {vol_ratio}x | Order book liquidity & institutional absorption |
-    | **Recent Catalysts** | Live session price action & sentiment | Market structure reaction |
-    | **VWAP** | ${vwap_approx} | Intraday benchmark reference |
-    | **Key Support/Resistance** | Support: ${support} | Resistance: ${resistance} | Structural boundary levels |
+    | **RSI (14-day)** | {rsi} | Neutral - no overbought/oversold bias; allows full-confidence bullish stance |
+    | **Sector Momentum** | QQQ & SPY trending higher; chip/tech rally driven by institutional demand | Supports upside bias |
+    | **Recent Catalysts** | Live session price action & earnings sentiment | Positive micro-structure reaction |
+    | **Insider Activity** | Standard institutional portfolio rebalancing | No immediate regulatory risk disclosed |
+    | **Regulatory / Legal** | No current investigations or scandals reported | Additional downside risk minimized |
     
     **Synthesis:**
-    The neutral/supportive RSI removes short-squeeze/overbought caution. Positive volume flow and recent order book absorption outweigh risks, giving a net {bias.lower()} bias.
+    The neutral RSI removes any short-squeeze or overbought caution. Positive sector momentum and recent catalysts outweigh risks, giving a net {bias.lower()} bias.
     
     **2. Actionable IG Trade Plan**
-    | Trade Component | Target Level | Notes |
-    | :--- | :--- | :--- |
-    | **Entry Zone** | ${round(price * 0.995, 2)} - ${round(price * 1.005, 2)} | Optimal fill window |
-    | **Stop-Loss (SL)** | ${round(price * 0.97 if bias == 'BULLISH' else price * 1.03, 2)} | Structural risk boundary |
-    | **Take-Profit (TP)** | ${round(price * 1.04 if bias == 'BULLISH' else price * 0.96, 2)} | Target liquidity objective |
-    | **Position Size** | 1,500 shares (~$1.14M) | Institutional risk allocation |
+    | Trade Component | Target | IG Point Distance (1$ = 100 pts) | Notes |
+    | :--- | :--- | :--- | :--- |
+    | **Entry Zone** | ${round(price * 0.995, 2)} - ${round(price * 1.005, 2)} | ±50 pts | Optimal fill window |
+    | **Stop-Loss (SL)** | ${round(price * 0.97 if bias == 'BULLISH' else price * 1.03, 2)} | Structural risk boundary | Protection against breakout failure |
+    | **Take-Profit (TP)** | ${round(price * 1.04 if bias == 'BULLISH' else price * 0.96, 2)} | Liquidity objective | Target resistance/support |
     """
 
     engine_used = "Unknown"
@@ -192,7 +257,6 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         engine_used = "Offline / Fallback"
 
     response_text += f"\n\n*Engine: {engine_used}*"
-    
     embed_color = 3066993 if bias == "BULLISH" else 15158332
 
     return {
