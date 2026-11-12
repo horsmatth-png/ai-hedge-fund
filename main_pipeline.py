@@ -9,7 +9,7 @@ load_dotenv()
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY") or os.getenv("FINNHUB_KEY")
 
 # ==========================================
 # 🇬🇧 UK DYNAMIC SCANNER & AI ENGINE (08:30 AM UK)
