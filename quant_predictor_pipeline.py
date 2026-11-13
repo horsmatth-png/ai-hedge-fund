@@ -1,7 +1,5 @@
 import os
-import re
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import requests
 import yfinance as yf
@@ -14,65 +12,36 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY") or os.getenv("FINNHUB_KEY")
 
-# Expanded Quant Watchlist covering top liquid SPY & QQQ constituents
-QUANT_UNIVERSE = [
-    # Mega-Cap Tech & Growth
-    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "NFLX", "AVGO", "ADBE", "CRM", "QCOM", "INTC", "CSCO",
-    # Financials & Banking
-    "JPM", "BAC", "GS", "MS", "V", "MA", "BLK", "WFC", "C",
-    # Healthcare & Biotech
-    "UNH", "LLY", "JNJ", "PFE", "ABBV", "MRK", "TMO", "AMGN",
-    # Industrials, Defense & Energy
-    "CAT", "GE", "RTX", "LMT", "HON", "BA", "XOM", "CVX", "COP", "NEE",
-    # Consumer Cyclical & Defensive
-    "WMT", "COST", "PG", "KO", "PEP", "MCD", "DIS", "NKE"
-]
+# STRICTLY INDEX-LEVEL SCOPE AS REQUESTED
+QUANT_UNIVERSE = ["SPY", "QQQ"]
 
 
-def fetch_finnhub_intelligence(ticker: str):
-    """Pulls company-relevant news and recent insider transactions from Finnhub."""
+def fetch_finnhub_macro_intelligence():
+    """Pulls broad market / macroeconomic news from Finnhub to gauge general market sentiment."""
     headlines = []
-    insider_notes = "No major recent insider filings."
     if not FINNHUB_API_KEY:
-        return "Finnhub API Key missing.", insider_notes
+        return "Finnhub API Key missing."
 
     try:
         today = datetime.utcnow().strftime("%Y-%m-%d")
         three_days_ago = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
         
-        news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={three_days_ago}&to={today}&token={FINNHUB_API_KEY}"
+        # Use macro/general news or fallback to major index sentiment
+        news_url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
         news_res = requests.get(news_url, timeout=5)
         if news_res.status_code == 200:
             articles = news_res.json()
-            for art in articles:
-                title = art.get("headline", "").strip()
-                if title and (ticker.lower() in title.lower()):
-                    if title not in headlines:
-                        headlines.append(title)
-                if len(headlines) >= 3:
-                    break
-            if not headlines and articles:
-                for art in articles[:2]:
-                    if art.get("headline"):
-                        headlines.append(art["headline"])
-
-        insider_url = f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={ticker}&token={FINNHUB_API_KEY}"
-        ins_res = requests.get(insider_url, timeout=5)
-        if ins_res.status_code == 200:
-            txs = ins_res.json().get("data", [])[:2]
-            if txs:
-                tx_list = [f"{tx.get('name')} ({tx.get('change'):,} shs)" for tx in txs if tx.get("name")]
-                if tx_list:
-                    insider_notes = "; ".join(tx_list)
+            for art in articles[:4]:
+                if art.get("headline"):
+                    headlines.append(art["headline"])
     except Exception as e:
-        print(f"⚠️ Finnhub error for {ticker}: {repr(e)}")
+        print(f"⚠️ Finnhub macro fetch error: {repr(e)}")
 
-    news_text = " | ".join(headlines) if headlines else "No major headlines in last 72h."
-    return news_text, insider_notes
+    return " | ".join(headlines) if headlines else "No major macro headlines in last 72h."
 
 
-def analyze_quant_asset(ticker: str):
-    """Pulls historical data, computes volatility projections (lowest/highest price bounds), and scores fundamentals."""
+def analyze_index_asset(ticker: str):
+    """Pulls historical data for SPY or QQQ, computes volatility projections (lowest/highest price bounds)."""
     try:
         t = yf.Ticker(ticker)
         df = t.history(period="3mo", interval="1d")
@@ -98,143 +67,95 @@ def analyze_quant_asset(ticker: str):
         true_range = np.maximum(high_low, np.maximum(high_close, low_close))
         atr_14 = float(true_range.rolling(14).mean().iloc[-1])
 
-        # Predictive Price Bounds (Statistical projection for next 5-10 sessions)
-        # Lowest expected trough based on current ATR & support buffer
-        lowest_price_target = round(current_price - (1.8 * atr_14), 2)
-        # Highest expected peak based on resistance expansion
-        highest_price_target = round(current_price + (2.2 * atr_14), 2)
-
-        # Fundamentals & Valuation Multiples
-        info = t.info or {}
-        trailing_pe = info.get("trailingPE")
-        forward_pe = info.get("forwardPE")
-        price_to_sales = info.get("priceToSalesTrailing12Months")
-        earnings_growth = info.get("earningsGrowth")
-        sector = info.get("sector", "Equities")
-        name = info.get("shortName", ticker)
+        # Predictive Price Bounds (Statistical projection)
+        lowest_price_target = round(current_price - (1.5 * atr_14), 2)
+        highest_price_target = round(current_price + (1.8 * atr_14), 2)
 
         # Volume analysis
         volume = int(df["Volume"].iloc[-1])
         avg_volume = float(df["Volume"].rolling(10).mean().iloc[-1])
         vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
-        news_summary, insider_summary = fetch_finnhub_intelligence(ticker)
-        news_lower = news_summary.lower()
+        macro_news = fetch_finnhub_intelligence()
 
-        # Shock filter
-        has_shock = any(w in news_lower for w in ["resign", "exit", "investigation", "fraud", "subpoena", "sec probe"])
-
-        # Quant Scoring (0-100)
-        score = 55
+        # Scoring (0-100)
+        score = 70
         if 40 <= rsi <= 65:
             score += 15
-        if vol_ratio > 1.1:
+        if vol_ratio > 1.0:
             score += 10
-        if forward_pe and trailing_pe and forward_pe < trailing_pe:
-            score += 10  # Earnings compression tailwind
-        if earnings_growth and earnings_growth > 0.10:
-            score += 10
-        if has_shock:
-            score -= 35
 
-        score = max(10, min(98, score))
+        score = max(50, min(98, score))
 
         # 3 PM UK / US Session Execution Levels
-        bias = "BULLISH" if current_price >= closes.rolling(10).mean().iloc[-1] and not has_shock else "BEARISH"
+        ma_10 = float(closes.rolling(10).mean().iloc[-1])
+        bias = "BULLISH" if current_price >= ma_10 else "BEARISH"
         vwap_approx = round(current_price * 1.0002, 2)
-        entry_low = round(current_price * 0.996, 2)
-        entry_high = round(current_price * 1.004, 2)
-        sl_price = round(current_price * 0.975 if bias == "BULLISH" else current_price * 1.025, 2)
+        entry_low = round(current_price * 0.997, 2)
+        entry_high = round(current_price * 1.003, 2)
+        sl_price = round(current_price * 0.985 if bias == "BULLISH" else current_price * 1.015, 2)
         tp_price = highest_price_target if bias == "BULLISH" else lowest_price_target
 
         return {
             "ticker": ticker,
-            "name": name,
-            "sector": sector,
+            "name": "SPDR S&P 500 ETF Trust" if ticker == "SPY" else "Invesco QQQ Trust",
             "price": current_price,
             "daily_change": daily_change_pct,
             "rsi": rsi,
             "lowest_price": lowest_price_target,
             "highest_price": highest_price_target,
-            "trailing_pe": trailing_pe if trailing_pe else "N/A",
-            "forward_pe": forward_pe if forward_pe else "N/A",
-            "ps_ratio": price_to_sales if price_to_sales else "N/A",
             "score": score,
             "bias": bias,
             "vwap": vwap_approx,
             "entry_zone": f"${entry_low} - ${entry_high}",
             "stop_loss": sl_price,
             "take_profit": tp_price,
-            "news": news_summary,
-            "insider": insider_summary
+            "news": macro_news
         }
     except Exception as e:
-        print(f"⚠️ Error scanning {ticker}: {repr(e)}")
+        print(f"⚠️ Error analyzing index {ticker}: {repr(e)}")
         return None
 
 
 def run_quant_predictor_scan():
     print("==================================================")
-    print("  🔮 RUNNING QUANT PREDICTOR & 3PM EXECUTION SCAN")
+    print("  🔮 RUNNING SPY & QQQ INDEX QUANT PREDICTOR")
     print("==================================================")
 
-    results = []
-    # Multithreaded scan for speed across 50+ mega-caps
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        future_to_ticker = {executor.submit(analyze_quant_asset, ticker): ticker for ticker in QUANT_UNIVERSE}
-        for future in as_completed(future_to_ticker):
-            res = future.result()
-            if res and res["score"] >= 65:  # High conviction filter
-                results.append(res)
+    for ticker in QUANT_UNIVERSE:
+        res = analyze_index_asset(ticker)
+        if res:
+            print(f"✅ Index Analyzed: ${res['ticker']} ({res['bias']}) — Score: {res['score']}/100 | Low Target: ${res['lowest_price']} | High Target: ${res['highest_price']}")
+            embed_payload = generate_quant_embed(res)
+            if DISCORD_WEBHOOK_URL:
+                requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
 
-    # Sort by highest confidence score
-    results.sort(key=lambda x: x["score"], reverse=True)
-    top_picks = results[:3]  # Top 3 diversified picks
-
-    if not top_picks:
-        print("⚠️ No assets met the high-conviction threshold.")
-        return
-
-    for pick in top_picks:
-        print(f"✅ Quant Top Pick: ${pick['ticker']} ({pick['bias']}) — Score: {pick['score']}/100 | Low Target: ${pick['lowest_price']} | High Target: ${pick['highest_price']}")
-        embed_payload = generate_quant_embed(pick)
-        if DISCORD_WEBHOOK_URL:
-            requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
-
-    print(f"--> Quant predictor scan complete. {len(top_picks)} institutional setups dispatched to Discord.")
+    print("--> Index quant predictor scan complete. SPY and QQQ reports dispatched to Discord.")
 
 
 def generate_quant_embed(pick: dict):
-    """Formats the quantitative prediction and 3 PM execution plan into a clean Discord embed."""
-    prompt = f"""
-    Format a concise institutional quant summary for {pick['name']} (${pick['ticker']}) in {pick['sector']}.
-    Current Price: ${pick['price']} | Lowest Expected Trough: ${pick['lowest_price']} | Highest Target: ${pick['highest_price']}
-    Trailing P/E: {pick['trailing_pe']} | Forward P/E: {pick['forward_pe']} | P/S: {pick['ps_ratio']}
-    News: {pick['news']}
-    """
-    
-    # Clean Markdown output without HTML tags
+    """Formats the quantitative index prediction and 3 PM execution plan into a clean Discord embed."""
     description = (
-        f"**QUANTITATIVE FORECAST & VALUATION DESK**\n\n"
-        f"| Metric | Projected Value | Institutional Rationale |\n"
+        f"**SPY & QQQ INDEX QUANT FORECAST DESK**\n\n"
+        f"| Metric | Projected Value | Macro Rationale |\n"
         f"| :--- | :--- | :--- |\n"
         f"| **Lowest Price Target** | `${pick['lowest_price']}` | Statistical downside trough (ATR buffer) |\n"
         f"| **Highest Price Target** | `${pick['highest_price']}` | Upside expansion target |\n"
-        f"| **Valuation (P/E & P/S)** | Fwd P/E: `{pick['forward_pe']}` / P/S: `{pick['ps_ratio']}` | Fundamental valuation multiple |\n"
-        f"| **RSI & Momentum** | `{pick['rsi']} RSI` | Momentum regime check |\n"
-        f"| **Live Finnhub News** | {pick['news'][:140]} | 72h catalyst scan |\n\n"
+        f"| **Current Price** | `${pick['price']}` (`{pick['daily_change']}%`) | Live session feed |\n"
+        f"| **RSI & Momentum** | `{pick['rsi']} RSI` | Index momentum regime check |\n"
+        f"| **Macro Headlines** | {pick['news'][:120]} | Broad market sentiment scan |\n\n"
         f"**3:00 PM UK Session Execution Plan:**\n"
         f"• **Directional Bias:** `{pick['bias']}`\n"
-        f"• **Entry Zone:** `{pick['entry_zone']}` (VWap: `${pick['vwap']}`)\n"
+        f"• **Entry Zone:** `{pick['entry_zone']}` (VWAP: `${pick['vwap']}`)\n"
         f"• **Stop-Loss (SL):** `${pick['stop_loss']}`\n"
         f"• **Take-Profit (TP):** `${pick['take_profit']}`\n\n"
-        f"🤖 *Engine: Multi-Asset Quant Predictor + Finnhub Fundamentals*"
+        f"🤖 *Engine: Index Quant Predictor + Finnhub Macro Feed*"
     )
 
     return {
-        "username": "Quant Prediction Engine",
+        "username": "Index Quant Prediction Engine",
         "embeds": [{
-            "title": f"📈 Quant Forecast: ${pick['ticker']} ({pick['bias']}) — Score: {pick['score']}/100",
+            "title": f"📈 Index Forecast: ${pick['ticker']} ({pick['bias']}) — Score: {pick['score']}/100",
             "description": description[:3900],
             "color": 3447003 if pick['bias'] == "BULLISH" else 15158332,
             "footer": {"text": f"3 PM UK Execution Scan | {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
