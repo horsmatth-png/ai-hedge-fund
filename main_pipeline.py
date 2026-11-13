@@ -22,9 +22,9 @@ UK_WATCH_UNIVERSE = [
 ]
 
 # ==========================================
-# 🇺🇸 US DYNAMIC UNIVERSE
+# 🇺🇸 US DYNAMIC EXPANDED UNIVERSE
 # ==========================================
-US_PRIMARY_UNIVERSE = [
+US_SCAN_UNIVERSE = [
     {"ticker": "SPY", "bias": "BULLISH"},
     {"ticker": "QQQ", "bias": "BULLISH"},
     {"ticker": "AAPL", "bias": "BULLISH"},
@@ -34,7 +34,12 @@ US_PRIMARY_UNIVERSE = [
     {"ticker": "AMZN", "bias": "BULLISH"},
     {"ticker": "META", "bias": "BULLISH"},
     {"ticker": "AVGO", "bias": "BULLISH"},
-    {"ticker": "TSLA", "bias": "BEARISH"},
+    {"ticker": "TSLA", "bias": "BULLISH"},
+    {"ticker": "AMD", "bias": "BULLISH"},
+    {"ticker": "NFLX", "bias": "BULLISH"},
+    {"ticker": "COST", "bias": "BULLISH"},
+    {"ticker": "JPM", "bias": "BULLISH"},
+    {"ticker": "LLY", "bias": "BULLISH"}
 ]
 
 BACKUP_UNIVERSE = [
@@ -59,26 +64,22 @@ def fetch_finnhub_intelligence(ticker: str):
         today = datetime.utcnow().strftime("%Y-%m-%d")
         three_days_ago = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
         
-        # 1. Live Company News with strict relevance check
         news_url = f"https://finnhub.io/api/v1/company-news?symbol={clean_symbol}&from={three_days_ago}&to={today}&token={FINNHUB_API_KEY}"
         news_res = requests.get(news_url, timeout=8)
         if news_res.status_code == 200:
             articles = news_res.json()
             for art in articles:
                 title = art.get("headline", "").strip()
-                # Ensure headline explicitly mentions ticker or clean symbol
                 if title and (clean_symbol.lower() in title.lower() or ticker.lower() in title.lower()):
                     if title not in headlines:
                         headlines.append(title)
                 if len(headlines) >= 4:
                     break
-            # Fallback if strict keyword filter was too tight
             if not headlines and articles:
                 for art in articles[:3]:
                     if art.get("headline"):
                         headlines.append(art["headline"])
 
-        # 2. Insider Transactions (for US equities)
         if not ticker.endswith(".L"):
             insider_url = f"https://finnhub.io/api/v1/stock/insider-transactions?symbol={clean_symbol}&token={FINNHUB_API_KEY}"
             ins_res = requests.get(insider_url, timeout=8)
@@ -122,29 +123,23 @@ def calculate_confidence_score(rsi: float, vol_ratio: float, bias: str, has_shoc
     score = 65
     if bias == "BULLISH":
         if 45 <= rsi <= 65: score += 15
-        elif rsi > 70 or rsi < 35: score -= 20
+        elif rsi > 70 or rsi < 35: score -= 25
     else: # BEARISH
         if 35 <= rsi <= 55: score += 15
-        elif rsi < 30 or rsi > 65: score -= 20
+        elif rsi < 30 or rsi > 65: score -= 25
 
     if vol_ratio > 1.2: score += 10
     elif vol_ratio < 0.8: score -= 5
 
-    if has_shock: score -= 35
-    return max(15, min(96, score))
+    if has_shock: score -= 40
+    return max(10, min(98, score))
 
-def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float, news_summary: str, insider_summary: str, region: str = "US"):
+def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float, news_summary: str, insider_summary: str, confidence_score: int, region: str = "US"):
     vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
     vwap_approx = round(price * 1.0005, 2)
     support = round(price * 0.98, 2)
     resistance = round(price * 1.02, 2)
     
-    news_lower = news_summary.lower()
-    shock_keywords = ["resign", "exit", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
-    has_shock = any(word in news_lower for word in shock_keywords)
-    
-    confidence_score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock)
-
     currency = "£" if region == "UK" else "$"
     market_context = "FTSE 100 institutional rotation & London session order flow" if region == "UK" else "QQQ & SPY index trajectory; US session institutional demand"
     
@@ -175,14 +170,14 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     | Factor | Observation | Impact |
     | :--- | :--- | :--- |
     | **Current Price** | {currency}{price} | Baseline for entry/stop |
-    | **RSI (14-day)** | {rsi} | Momentum & overbought/oversold regime check |
+    | **RSI (14-day)** | {rsi} | Momentum regime check |
     | **Sector Momentum** | {market_context} | Macro & sector alignment |
     | **Recent Catalysts** | [Summarize real Finnhub headlines above cleanly] | Direct price & sentiment driver |
     | **VWAP & S/R** | VWAP: {currency}{vwap_approx} | S: {currency}{support} / R: {currency}{resistance} | Key intraday boundary levels |
     | **Insider / Regulatory** | {insider_summary} | Governance & tail-risk check |
     
     **Synthesis:**
-    [2-3 sentences synthesizing the Finnhub headlines, insider activity, RSI, and volume flow into a clear net directional verdict.]
+    [2-3 sentences synthesizing Finnhub headlines, RSI, and volume flow into a net directional verdict.]
     
     ---
     
@@ -224,35 +219,12 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         except Exception as e:
             print(f"⚠️ Groq failed: {repr(e)}")
 
-    # Formatted table fallback if LLMs fail/timeout
     if not response_text:
-        response_text = f"""
-**1. Technical & News Confluence**
-| Factor | Observation | Impact |
-| :--- | :--- | :--- |
-| **Current Price** | {currency}{price} | Baseline for entry/stop |
-| **RSI (14-day)** | {rsi} | Momentum regime check |
-| **Recent Catalysts** | {news_summary[:120]} | Direct sentiment driver |
-| **VWAP & S/R** | VWAP: {currency}{vwap_approx} | S: {currency}{support} / R: {currency}{resistance} |
-| **Insider / Regulatory** | {insider_summary[:80]} | Governance check |
+        response_text = f"**Analysis:** Price: {currency}{price} | RSI: {rsi} | Score: {confidence_score}/100"
+        engine_used = "Quantitative Fallback"
 
-**Synthesis:**
-Quantitative fallback triggered due to API rate limit. Price action and RSI ({rsi}) dictate a cautious structured approach aligned with baseline directional bias.
-
----
-
-**2. Actionable IG Trade Plan**
-| Trade Component | Target | IG Point Distance | Notes |
-| :--- | :--- | :--- | :--- |
-| **Entry Zone** | {currency}{entry_low} - {currency}{entry_high} | ±50 pts | Optimal fill window |
-| **Stop-Loss (SL)** | {currency}{sl_price} | {sl_pts} pts | Risk boundary |
-| **Take-Profit (TP)** | {currency}{tp_price} | {tp_pts} pts | Objective |
-"""
-        engine_used = "Quantitative Fallback Table"
-
-    # Strip HTML tags like <br>
     response_text = re.sub(r"<br\s*/?>", " / ", response_text, flags=re.IGNORECASE)
-    response_text += f"\n\n🤖 *Engine: {engine_used} + Finnhub Live Feed*"
+    response_text += f"\n\n🤖 *Engine: {engine_used} + Finnhub Feed*"
     
     embed_color = 3066993 if bias == "BULLISH" else 15158332
     bot_name = "UK Dynamic Quant Engine" if region == "UK" else "AI Quant Execution Engine"
@@ -279,29 +251,36 @@ def run_uk_morning_scan():
         if price:
             vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
             bias = "BULLISH" if rsi > 50 else "BEARISH"
-            scanned_results.append({
-                "ticker": ticker, "price": price, "rsi": rsi, "volume": volume, 
-                "avg_volume": avg_volume, "vol_ratio": vol_ratio, "bias": bias, 
-                "news": news_summary, "insider": insider_summary
-            })
+            news_lower = news_summary.lower()
+            has_shock = any(w in news_lower for w in ["resign", "exit", "investigation", "fraud", "subpoena"])
+            score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock)
+            
+            if score >= 60: # Strict quality filter
+                scanned_results.append({
+                    "ticker": ticker, "price": price, "rsi": rsi, "volume": volume, 
+                    "avg_volume": avg_volume, "vol_ratio": vol_ratio, "bias": bias, 
+                    "news": news_summary, "insider": insider_summary, "score": score
+                })
 
-    scanned_results.sort(key=lambda x: x["vol_ratio"], reverse=True)
-    for item in scanned_results[:3]:
-        print(f"✅ UK Top Pick: {item['ticker']} ({item['bias']}). Generating Full IG Trade Execution...")
+    scanned_results.sort(key=lambda x: x["score"], reverse=True)
+    top_picks = scanned_results[:3] # Top 3 highest conviction only
+
+    for item in top_picks:
+        print(f"✅ UK Top Pick: {item['ticker']} (Score: {item['score']}/100). Dispatching...")
         embed_payload = generate_ai_analysis(
-            item["ticker"], item["bias"], item["price"], item["rsi"], item["volume"], item["avg_volume"], item["news"], item["insider"], region="UK"
+            item["ticker"], item["bias"], item["price"], item["rsi"], item["volume"], item["avg_volume"], item["news"], item["insider"], item["score"], region="UK"
         )
         if DISCORD_WEBHOOK_URL:
             requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
 
 def run_us_validation():
     print("==================================================")
-    print("  🇺🇸 RUNNING US 3 PM DYNAMIC VALIDATION & INSTITUTIONAL ENGINE")
+    print("  🇺🇸 RUNNING US 3 PM DYNAMIC SCAN, RANKING & EXECUTION")
     print("==================================================")
     
-    confirmed_count = 0
+    scored_candidates = []
 
-    for item in US_PRIMARY_UNIVERSE:
+    for item in US_SCAN_UNIVERSE:
         ticker = item["ticker"]
         bias = item["bias"]
 
@@ -314,23 +293,46 @@ def run_us_validation():
         shock_keywords = ["resign", "exit", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
         has_shock_news = any(word in news_lower for word in shock_keywords)
 
+        # Basic validity filter (kill waterfalls & extreme shocks)
         is_valid = True
-        if bias == "BULLISH" and (rsi > 70 or rsi < 35 or daily_change_pct < -1.5 or has_shock_news):
+        if bias == "BULLISH" and (rsi > 75 or rsi < 32 or daily_change_pct < -2.0 or has_shock_news):
             is_valid = False
-        elif bias == "BEARISH" and (rsi < 30 or daily_change_pct > 2.0):
+        elif bias == "BEARISH" and (rsi < 28 or daily_change_pct > 2.5):
             is_valid = False
 
-        if is_valid:
-            confirmed_count += 1
-            print(f"✅ ${ticker} CONFIRMED ({daily_change_pct}%). Dispatching Rich Embed to Discord...")
-            embed_payload = generate_ai_analysis(ticker, bias, live_price, rsi, volume, avg_volume, news_summary, insider_summary, region="US")
+        if not is_valid:
+            print(f"❌ ${ticker} filtered out (Daily Chg: {daily_change_pct}%, RSI: {rsi}, Shock: {has_shock_news}).")
+            continue
+
+        vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
+        score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock_news)
+
+        # STRICT INSTITUTIONAL THRESHOLD: Must score 65 or higher to be considered
+        if score >= 65:
+            scored_candidates.append({
+                "ticker": ticker, "bias": bias, "price": live_price, "rsi": rsi,
+                "volume": volume, "avg_volume": avg_volume, "news": news_summary,
+                "insider": insider_summary, "score": score
+            })
+            print(f"✅ ${ticker} PASSED (Score: {score}/100)")
+        else:
+            print(f"⚠️ ${ticker} dropped — Score {score}/100 is below the 65 institutional threshold.")
+
+    # Sort by highest score and take ONLY the top 3 best opportunities
+    scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+    top_picks = scored_candidates[:3]
+
+    if top_picks:
+        print(f"🎯 Dispatching Top {len(top_picks)} Ranked Setups to Discord...")
+        for pick in top_picks:
+            embed_payload = generate_ai_analysis(
+                pick["ticker"], pick["bias"], pick["price"], pick["rsi"], 
+                pick["volume"], pick["avg_volume"], pick["news"], pick["insider"], pick["score"], region="US"
+            )
             if DISCORD_WEBHOOK_URL:
                 requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
-        else:
-            print(f"❌ ${ticker} INVALIDATED (Daily Chg: {daily_change_pct}%, RSI: {rsi}, Finnhub Shock: {has_shock_news}).")
-
-    if confirmed_count == 0:
-        print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero primary setups confirmed. Running dynamic backup scan...")
+    else:
+        print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero setups met the >= 65 score threshold. Running backup scan...")
         scanned_backups = []
         for backup in BACKUP_UNIVERSE:
             b_price, _, b_rsi, _, _, _, _ = fetch_market_data(backup["ticker"])
@@ -342,7 +344,7 @@ def run_us_validation():
 
         top_3 = scanned_backups[:3]
         backup_summary = (
-            "⚠️ **Market Regime Warning: Primary Setups Invalidated.**\n"
+            "⚠️ **Market Regime Warning: Primary Setups Below 65/100 Confidence.**\n"
             "The dynamic scanner has swept alternative asset classes and surfaced top live hedges:\n\n"
         )
         for asset in top_3:
@@ -363,8 +365,6 @@ def run_us_validation():
         if DISCORD_WEBHOOK_URL:
             requests.post(DISCORD_WEBHOOK_URL, json=backup_payload)
         print("--> Contingency backup alert dispatched to Discord successfully!")
-    else:
-        print(f"--> Scan complete. {confirmed_count} confirmed setup(s) processed through institutional pipeline.")
 
 if __name__ == "__main__":
     current_hour = datetime.utcnow().hour
