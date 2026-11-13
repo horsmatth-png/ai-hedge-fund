@@ -22,24 +22,49 @@ UK_WATCH_UNIVERSE = [
 ]
 
 # ==========================================
-# 🇺🇸 US DYNAMIC EXPANDED UNIVERSE
+# 🇺🇸 US DYNAMIC MULTI-SECTOR EXPANDED UNIVERSE
 # ==========================================
 US_SCAN_UNIVERSE = [
+    # Mega-Cap Tech & Growth
     {"ticker": "SPY", "bias": "BULLISH"},
     {"ticker": "QQQ", "bias": "BULLISH"},
     {"ticker": "AAPL", "bias": "BULLISH"},
-    {"ticker": "NVDA", "bias": "BULLISH"},
     {"ticker": "MSFT", "bias": "BULLISH"},
-    {"ticker": "GOOGL", "bias": "BEARISH"},
+    {"ticker": "GOOGL", "bias": "BULLISH"},
     {"ticker": "AMZN", "bias": "BULLISH"},
     {"ticker": "META", "bias": "BULLISH"},
-    {"ticker": "AVGO", "bias": "BULLISH"},
+    {"ticker": "NVDA", "bias": "BULLISH"},
     {"ticker": "TSLA", "bias": "BULLISH"},
     {"ticker": "AMD", "bias": "BULLISH"},
     {"ticker": "NFLX", "bias": "BULLISH"},
-    {"ticker": "COST", "bias": "BULLISH"},
+    {"ticker": "AVGO", "bias": "BULLISH"},
+    
+    # Financials & Banking
     {"ticker": "JPM", "bias": "BULLISH"},
-    {"ticker": "LLY", "bias": "BULLISH"}
+    {"ticker": "BAC", "bias": "BULLISH"},
+    {"ticker": "GS", "bias": "BULLISH"},
+    {"ticker": "V", "bias": "BULLISH"},
+    {"ticker": "MA", "bias": "BULLISH"},
+    
+    # Healthcare & Pharma
+    {"ticker": "UNH", "bias": "BULLISH"},
+    {"ticker": "LLY", "bias": "BULLISH"},
+    {"ticker": "JNJ", "bias": "BULLISH"},
+    {"ticker": "PFE", "bias": "BEARISH"},
+    
+    # Industrials, Defense & Energy
+    {"ticker": "CAT", "bias": "BULLISH"},
+    {"ticker": "GE", "bias": "BULLISH"},
+    {"ticker": "RTX", "bias": "BULLISH"},
+    {"ticker": "LMT", "bias": "BULLISH"},
+    {"ticker": "XOM", "bias": "BULLISH"},
+    {"ticker": "CVX", "bias": "BULLISH"},
+    
+    # Consumer Defensive & Retail
+    {"ticker": "WMT", "bias": "BULLISH"},
+    {"ticker": "COST", "bias": "BULLISH"},
+    {"ticker": "PG", "bias": "BULLISH"},
+    {"ticker": "KO", "bias": "BULLISH"}
 ]
 
 BACKUP_UNIVERSE = [
@@ -255,7 +280,7 @@ def run_uk_morning_scan():
             has_shock = any(w in news_lower for w in ["resign", "exit", "investigation", "fraud", "subpoena"])
             score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock)
             
-            if score >= 60: # Strict quality filter
+            if score >= 60:
                 scanned_results.append({
                     "ticker": ticker, "price": price, "rsi": rsi, "volume": volume, 
                     "avg_volume": avg_volume, "vol_ratio": vol_ratio, "bias": bias, 
@@ -263,7 +288,7 @@ def run_uk_morning_scan():
                 })
 
     scanned_results.sort(key=lambda x: x["score"], reverse=True)
-    top_picks = scanned_results[:3] # Top 3 highest conviction only
+    top_picks = scanned_results[:3]
 
     for item in top_picks:
         print(f"✅ UK Top Pick: {item['ticker']} (Score: {item['score']}/100). Dispatching...")
@@ -275,7 +300,7 @@ def run_uk_morning_scan():
 
 def run_us_validation():
     print("==================================================")
-    print("  🇺🇸 RUNNING US 3 PM DYNAMIC SCAN, RANKING & EXECUTION")
+    print("  🇺🇸 RUNNING US MULTI-SECTOR SCAN, RANKING & EXECUTION")
     print("==================================================")
     
     scored_candidates = []
@@ -293,11 +318,10 @@ def run_us_validation():
         shock_keywords = ["resign", "exit", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
         has_shock_news = any(word in news_lower for word in shock_keywords)
 
-        # Basic validity filter (kill waterfalls & extreme shocks)
         is_valid = True
-        if bias == "BULLISH" and (rsi > 75 or rsi < 32 or daily_change_pct < -2.0 or has_shock_news):
+        if bias == "BULLISH" and (rsi > 78 or rsi < 30 or daily_change_pct < -2.5 or has_shock_news):
             is_valid = False
-        elif bias == "BEARISH" and (rsi < 28 or daily_change_pct > 2.5):
+        elif bias == "BEARISH" and (rsi < 25 or daily_change_pct > 3.0):
             is_valid = False
 
         if not is_valid:
@@ -307,8 +331,7 @@ def run_us_validation():
         vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
         score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock_news)
 
-        # STRICT INSTITUTIONAL THRESHOLD: Must score 65 or higher to be considered
-        if score >= 65:
+        if score >= 60:
             scored_candidates.append({
                 "ticker": ticker, "bias": bias, "price": live_price, "rsi": rsi,
                 "volume": volume, "avg_volume": avg_volume, "news": news_summary,
@@ -316,14 +339,14 @@ def run_us_validation():
             })
             print(f"✅ ${ticker} PASSED (Score: {score}/100)")
         else:
-            print(f"⚠️ ${ticker} dropped — Score {score}/100 is below the 65 institutional threshold.")
+            print(f"⚠️ ${ticker} dropped — Score {score}/100 is below threshold.")
 
-    # Sort by highest score and take ONLY the top 3 best opportunities
+    # Sort by highest score and take the top 3 absolute best opportunities across all sectors
     scored_candidates.sort(key=lambda x: x["score"], reverse=True)
     top_picks = scored_candidates[:3]
 
     if top_picks:
-        print(f"🎯 Dispatching Top {len(top_picks)} Ranked Setups to Discord...")
+        print(f"🎯 Dispatching Top {len(top_picks)} Multi-Sector Ranked Setups to Discord...")
         for pick in top_picks:
             embed_payload = generate_ai_analysis(
                 pick["ticker"], pick["bias"], pick["price"], pick["rsi"], 
@@ -332,7 +355,7 @@ def run_us_validation():
             if DISCORD_WEBHOOK_URL:
                 requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
     else:
-        print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero setups met the >= 65 score threshold. Running backup scan...")
+        print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero setups met threshold. Running backup scan...")
         scanned_backups = []
         for backup in BACKUP_UNIVERSE:
             b_price, _, b_rsi, _, _, _, _ = fetch_market_data(backup["ticker"])
@@ -344,7 +367,7 @@ def run_us_validation():
 
         top_3 = scanned_backups[:3]
         backup_summary = (
-            "⚠️ **Market Regime Warning: Primary Setups Below 65/100 Confidence.**\n"
+            "⚠️ **Market Regime Warning: Primary Setups Below Threshold.**\n"
             "The dynamic scanner has swept alternative asset classes and surfaced top live hedges:\n\n"
         )
         for asset in top_3:
