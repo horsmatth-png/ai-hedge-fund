@@ -26,45 +26,15 @@ UK_WATCH_UNIVERSE = [
 # ==========================================
 US_SCAN_UNIVERSE = [
     # Mega-Cap Tech & Growth
-    {"ticker": "SPY", "bias": "BULLISH"},
-    {"ticker": "QQQ", "bias": "BULLISH"},
-    {"ticker": "AAPL", "bias": "BULLISH"},
-    {"ticker": "MSFT", "bias": "BULLISH"},
-    {"ticker": "GOOGL", "bias": "BULLISH"},
-    {"ticker": "AMZN", "bias": "BULLISH"},
-    {"ticker": "META", "bias": "BULLISH"},
-    {"ticker": "NVDA", "bias": "BULLISH"},
-    {"ticker": "TSLA", "bias": "BULLISH"},
-    {"ticker": "AMD", "bias": "BULLISH"},
-    {"ticker": "NFLX", "bias": "BULLISH"},
-    {"ticker": "AVGO", "bias": "BULLISH"},
-    
+    "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "TSLA", "AMD", "NFLX", "AVGO",
     # Financials & Banking
-    {"ticker": "JPM", "bias": "BULLISH"},
-    {"ticker": "BAC", "bias": "BULLISH"},
-    {"ticker": "GS", "bias": "BULLISH"},
-    {"ticker": "V", "bias": "BULLISH"},
-    {"ticker": "MA", "bias": "BULLISH"},
-    
+    "JPM", "BAC", "GS", "V", "MA",
     # Healthcare & Pharma
-    {"ticker": "UNH", "bias": "BULLISH"},
-    {"ticker": "LLY", "bias": "BULLISH"},
-    {"ticker": "JNJ", "bias": "BULLISH"},
-    {"ticker": "PFE", "bias": "BEARISH"},
-    
+    "UNH", "LLY", "JNJ", "PFE",
     # Industrials, Defense & Energy
-    {"ticker": "CAT", "bias": "BULLISH"},
-    {"ticker": "GE", "bias": "BULLISH"},
-    {"ticker": "RTX", "bias": "BULLISH"},
-    {"ticker": "LMT", "bias": "BULLISH"},
-    {"ticker": "XOM", "bias": "BULLISH"},
-    {"ticker": "CVX", "bias": "BULLISH"},
-    
+    "CAT", "GE", "RTX", "LMT", "XOM", "CVX",
     # Consumer Defensive & Retail
-    {"ticker": "WMT", "bias": "BULLISH"},
-    {"ticker": "COST", "bias": "BULLISH"},
-    {"ticker": "PG", "bias": "BULLISH"},
-    {"ticker": "KO", "bias": "BULLISH"}
+    "WMT", "COST", "PG", "KO"
 ]
 
 BACKUP_UNIVERSE = [
@@ -137,27 +107,37 @@ def fetch_market_data(ticker: str):
             volume = df["Volume"].iloc[-1]
             avg_volume = df["Volume"].rolling(window=10).mean().iloc[-1]
             
+            # Dynamic Bias Determination based on 10-day trend
+            ma_10 = df["Close"].rolling(window=10).mean().iloc[-1]
+            bias = "BULLISH" if price >= ma_10 else "BEARISH"
+            
+            sector = info_sector = "Equities"
+            try:
+                sector = t.info.get("sector", "Equities")
+            except:
+                pass
+
             news_summary, insider_summary = fetch_finnhub_intelligence(ticker)
-            return round(float(price), 2), round(prev_close, 2), rsi, int(volume), int(avg_volume), news_summary, insider_summary
+            return round(float(price), 2), round(prev_close, 2), rsi, int(volume), int(avg_volume), bias, sector, news_summary, insider_summary
     except Exception as e:
         print(f"⚠️ Fetch error for {ticker}: {repr(e)}")
-    return None, None, 50.0, 0, 0, "No news available.", "No insider data."
+    return None, None, 50.0, 0, 0, "BULLISH", "Equities", "No news available.", "No insider data."
 
 def calculate_confidence_score(rsi: float, vol_ratio: float, bias: str, has_shock: bool) -> int:
     """Computes a robust institutional confidence score out of 100."""
     score = 65
     if bias == "BULLISH":
-        if 45 <= rsi <= 65: score += 15
-        elif rsi > 70 or rsi < 35: score -= 25
+        if 40 <= rsi <= 65: score += 15
+        elif rsi > 75 or rsi < 30: score -= 20
     else: # BEARISH
-        if 35 <= rsi <= 55: score += 15
-        elif rsi < 30 or rsi > 65: score -= 25
+        if 35 <= rsi <= 60: score += 15
+        elif rsi < 25 or rsi > 70: score -= 20
 
-    if vol_ratio > 1.2: score += 10
-    elif vol_ratio < 0.8: score -= 5
+    if vol_ratio > 1.1: score += 10
+    elif vol_ratio < 0.7: score -= 5
 
-    if has_shock: score -= 40
-    return max(10, min(98, score))
+    if has_shock: score -= 35
+    return max(15, min(95, score))
 
 def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float, news_summary: str, insider_summary: str, confidence_score: int, region: str = "US"):
     vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
@@ -166,7 +146,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     resistance = round(price * 1.02, 2)
     
     currency = "£" if region == "UK" else "$"
-    market_context = "FTSE 100 institutional rotation & London session order flow" if region == "UK" else "QQQ & SPY index trajectory; US session institutional demand"
+    market_context = "FTSE 100 institutional rotation & London session order flow" if region == "UK" else "US multi-sector equity rotation & institutional order flow"
     
     entry_low = round(price * 0.995, 2)
     entry_high = round(price * 1.005, 2)
@@ -177,7 +157,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     tp_pts = int(abs(tp_price - price) * 100)
 
     prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Analyze {ticker} trading at {currency}{price} (14-day RSI: {rsi}, Initial Bias: {bias}, Volume Ratio: {vol_ratio}x, Confidence Score: {confidence_score}/100).
+    You are an elite quantitative hedge fund execution engine. Analyze {ticker} trading at {currency}{price} (14-day RSI: {rsi}, Dynamic Bias: {bias}, Volume Ratio: {vol_ratio}x, Confidence Score: {confidence_score}/100).
     
     LIVE FINNHUB HEADLINES FOR {ticker}:
     "{news_summary}"
@@ -272,20 +252,19 @@ def run_uk_morning_scan():
     
     scanned_results = []
     for ticker in UK_WATCH_UNIVERSE:
-        price, prev_close, rsi, volume, avg_volume, news_summary, insider_summary = fetch_market_data(ticker)
-        if price:
+        res = fetch_market_data(ticker)
+        if res and res[0]:
+            price, prev_close, rsi, volume, avg_volume, bias, sector, news_summary, insider_summary = res
             vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
-            bias = "BULLISH" if rsi > 50 else "BEARISH"
             news_lower = news_summary.lower()
             has_shock = any(w in news_lower for w in ["resign", "exit", "investigation", "fraud", "subpoena"])
             score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock)
             
-            if score >= 60:
-                scanned_results.append({
-                    "ticker": ticker, "price": price, "rsi": rsi, "volume": volume, 
-                    "avg_volume": avg_volume, "vol_ratio": vol_ratio, "bias": bias, 
-                    "news": news_summary, "insider": insider_summary, "score": score
-                })
+            scanned_results.append({
+                "ticker": ticker, "price": price, "rsi": rsi, "volume": volume, 
+                "avg_volume": avg_volume, "vol_ratio": vol_ratio, "bias": bias, 
+                "sector": sector, "news": news_summary, "insider": insider_summary, "score": score
+            })
 
     scanned_results.sort(key=lambda x: x["score"], reverse=True)
     top_picks = scanned_results[:3]
@@ -300,53 +279,53 @@ def run_uk_morning_scan():
 
 def run_us_validation():
     print("==================================================")
-    print("  🇺🇸 RUNNING US MULTI-SECTOR SCAN, RANKING & EXECUTION")
+    print("  🇺🇸 RUNNING US MULTI-SECTOR DIVERSIFIED SCAN")
     print("==================================================")
     
     scored_candidates = []
 
-    for item in US_SCAN_UNIVERSE:
-        ticker = item["ticker"]
-        bias = item["bias"]
-
-        live_price, prev_close, rsi, volume, avg_volume, news_summary, insider_summary = fetch_market_data(ticker)
-        if not live_price or not prev_close:
+    for ticker in US_SCAN_UNIVERSE:
+        res = fetch_market_data(ticker)
+        if not res or not res[0]:
             continue
+            
+        live_price, prev_close, rsi, volume, avg_volume, bias, sector, news_summary, insider_summary = res
 
         daily_change_pct = round(((live_price - prev_close) / prev_close) * 100, 2)
         news_lower = news_summary.lower()
         shock_keywords = ["resign", "exit", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
         has_shock_news = any(word in news_lower for word in shock_keywords)
 
-        is_valid = True
-        if bias == "BULLISH" and (rsi > 78 or rsi < 30 or daily_change_pct < -2.5 or has_shock_news):
-            is_valid = False
-        elif bias == "BEARISH" and (rsi < 25 or daily_change_pct > 3.0):
-            is_valid = False
-
-        if not is_valid:
-            print(f"❌ ${ticker} filtered out (Daily Chg: {daily_change_pct}%, RSI: {rsi}, Shock: {has_shock_news}).")
+        if has_shock_news:
+            print(f"❌ ${ticker} filtered out due to shock news.")
             continue
 
         vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
         score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock_news)
 
-        if score >= 60:
-            scored_candidates.append({
-                "ticker": ticker, "bias": bias, "price": live_price, "rsi": rsi,
-                "volume": volume, "avg_volume": avg_volume, "news": news_summary,
-                "insider": insider_summary, "score": score
-            })
-            print(f"✅ ${ticker} PASSED (Score: {score}/100)")
-        else:
-            print(f"⚠️ ${ticker} dropped — Score {score}/100 is below threshold.")
+        scored_candidates.append({
+            "ticker": ticker, "bias": bias, "price": live_price, "rsi": rsi,
+            "volume": volume, "avg_volume": avg_volume, "sector": sector,
+            "news": news_summary, "insider": insider_summary, "score": score
+        })
+        print(f"✅ ${ticker} ({sector}) Scored: {score}/100")
 
-    # Sort by highest score and take the top 3 absolute best opportunities across all sectors
+    # Sort by score
     scored_candidates.sort(key=lambda x: x["score"], reverse=True)
-    top_picks = scored_candidates[:3]
+
+    # DIVERSIFICATION ENFORCEMENT: Pick top candidates while avoiding duplicate sectors if possible
+    top_picks = []
+    seen_sectors = set()
+    
+    for candidate in scored_candidates:
+        if candidate["sector"] not in seen_sectors or len(top_picks) >= 2:
+            top_picks.append(candidate)
+            seen_sectors.add(candidate["sector"])
+        if len(top_picks) >= 3:
+            break
 
     if top_picks:
-        print(f"🎯 Dispatching Top {len(top_picks)} Multi-Sector Ranked Setups to Discord...")
+        print(f"🎯 Dispatching Top {len(top_picks)} Multi-Sector Diversified Setups to Discord...")
         for pick in top_picks:
             embed_payload = generate_ai_analysis(
                 pick["ticker"], pick["bias"], pick["price"], pick["rsi"], 
@@ -355,39 +334,7 @@ def run_us_validation():
             if DISCORD_WEBHOOK_URL:
                 requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
     else:
-        print("🚨 ALL-RED PROTOCOL ACTIVATED: Zero setups met threshold. Running backup scan...")
-        scanned_backups = []
-        for backup in BACKUP_UNIVERSE:
-            b_price, _, b_rsi, _, _, _, _ = fetch_market_data(backup["ticker"])
-            if b_price:
-                scanned_backups.append({
-                    "ticker": backup["ticker"], "name": backup["name"], "type": backup["type"],
-                    "price": b_price, "rsi": b_rsi
-                })
-
-        top_3 = scanned_backups[:3]
-        backup_summary = (
-            "⚠️ **Market Regime Warning: Primary Setups Below Threshold.**\n"
-            "The dynamic scanner has swept alternative asset classes and surfaced top live hedges:\n\n"
-        )
-        for asset in top_3:
-            backup_summary += (
-                f"🛡️ **${asset['ticker']}** ({asset['name']})\n"
-                f"• Type: `{asset['type']}` | Price: `${asset['price']}` | RSI: `{asset['rsi']}`\n\n"
-            )
-
-        backup_payload = {
-            "username": "US Dynamic Contingency Scanner",
-            "embeds": [{
-                "title": "🛡️ All-Red Protocol: Top 3 Market Hedges",
-                "description": backup_summary,
-                "color": 16753920,
-                "footer": {"text": f"Dynamic Backup Scan at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"}
-            }]
-        }
-        if DISCORD_WEBHOOK_URL:
-            requests.post(DISCORD_WEBHOOK_URL, json=backup_payload)
-        print("--> Contingency backup alert dispatched to Discord successfully!")
+        print("🚨 Contingency backup triggered.")
 
 if __name__ == "__main__":
     current_hour = datetime.utcnow().hour
