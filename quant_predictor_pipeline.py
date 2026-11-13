@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 import requests
 import yfinance as yf
@@ -8,25 +9,23 @@ import numpy as np
 load_dotenv()
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY") or os.getenv("FINNHUB_KEY")
 
-# STRICTLY INDEX-LEVEL SCOPE AS REQUESTED
+# STRICTLY INDEX-LEVEL SCOPE
 QUANT_UNIVERSE = ["SPY", "QQQ"]
 
 
-def fetch_finnhub_macro_intelligence():
-    """Pulls broad market / macroeconomic news from Finnhub to gauge general market sentiment."""
+def fetch_finnhub_intelligence():
+    """Pulls broad market and macroeconomic news from Finnhub to gauge general market sentiment."""
     headlines = []
     if not FINNHUB_API_KEY:
+        print("⚠️ Finnhub API Key missing.")
         return "Finnhub API Key missing."
 
     try:
         today = datetime.utcnow().strftime("%Y-%m-%d")
         three_days_ago = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
         
-        # Use macro/general news or fallback to major index sentiment
         news_url = f"https://finnhub.io/api/v1/news?category=general&token={FINNHUB_API_KEY}"
         news_res = requests.get(news_url, timeout=5)
         if news_res.status_code == 200:
@@ -46,6 +45,7 @@ def analyze_index_asset(ticker: str):
         t = yf.Ticker(ticker)
         df = t.history(period="3mo", interval="1d")
         if df.empty or len(df) < 30:
+            print(f"⚠️ Insufficient data returned for {ticker}")
             return None
 
         closes = df["Close"]
@@ -76,6 +76,7 @@ def analyze_index_asset(ticker: str):
         avg_volume = float(df["Volume"].rolling(10).mean().iloc[-1])
         vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
 
+        # Fixed function call name matching definition above
         macro_news = fetch_finnhub_intelligence()
 
         # Scoring (0-100)
@@ -122,13 +123,23 @@ def run_quant_predictor_scan():
     print("  🔮 RUNNING SPY & QQQ INDEX QUANT PREDICTOR")
     print("==================================================")
 
-    for ticker in QUANT_UNIVERSE:
-        res = analyze_index_asset(ticker)
-        if res:
-            print(f"✅ Index Analyzed: ${res['ticker']} ({res['bias']}) — Score: {res['score']}/100 | Low Target: ${res['lowest_price']} | High Target: ${res['highest_price']}")
-            embed_payload = generate_quant_embed(res)
-            if DISCORD_WEBHOOK_URL:
-                requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
+    if not DISCORD_WEBHOOK_URL:
+        print("❌ ERROR: DISCORD_WEBHOOK_URL environment variable is missing or empty!")
+        return
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_to_ticker = {executor.submit(analyze_index_asset, ticker): ticker for ticker in QUANT_UNIVERSE}
+        for future in as_completed(future_to_ticker):
+            res = future.result()
+            if res:
+                print(f"✅ Index Analyzed: ${res['ticker']} ({res['bias']}) — Score: {res['score']}/100 | Low Target: ${res['lowest_price']} | High Target: ${res['highest_price']}")
+                embed_payload = generate_quant_embed(res)
+                
+                # Dispatch to Discord with explicit status check logging
+                response = requests.post(DISCORD_WEBHOOK_URL, json=embed_payload)
+                print(f"📡 Discord Webhook Response for ${res['ticker']}: Status Code {response.status_code}")
+                if response.status_code != 204:
+                    print(f"⚠️ Discord Error Response Text: {response.text}")
 
     print("--> Index quant predictor scan complete. SPY and QQQ reports dispatched to Discord.")
 
@@ -148,7 +159,7 @@ def generate_quant_embed(pick: dict):
         f"• **Directional Bias:** `{pick['bias']}`\n"
         f"• **Entry Zone:** `{pick['entry_zone']}` (VWAP: `${pick['vwap']}`)\n"
         f"• **Stop-Loss (SL):** `${pick['stop_loss']}`\n"
-        f"• **Take-Profit (TP):** `${pick['take_profit']}`\n\n"
+        f"• **Take-Profit (TP):** `{pick['take_profit']}`\n\n"
         f"🤖 *Engine: Index Quant Predictor + Finnhub Macro Feed*"
     )
 
