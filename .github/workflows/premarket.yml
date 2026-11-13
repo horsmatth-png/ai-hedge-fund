@@ -7,6 +7,11 @@ on:
     - cron: '00 15 * * 1-5'
       timezone: 'Europe/London'
   workflow_dispatch:
+    inputs:
+      region:
+        description: 'Force region (UK or US). Leave blank to auto-detect by time.'
+        required: false
+        default: ''
 
 jobs:
   run-pipeline:
@@ -18,14 +23,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install Dependencies
         run: |
-          pip install requests yfinance python-dotenv groq google-generativeai
+          pip install requests yfinance pandas numpy lxml python-dotenv groq google-generativeai
 
       - name: Run Quant Pipeline
         env:
+          REGION: ${{ github.event.inputs.region }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
