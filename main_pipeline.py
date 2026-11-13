@@ -297,12 +297,28 @@ def fetch_news(ticker: str, region: str):
             r = requests.get("https://finnhub.io/api/v1/company-news",
                              params={"symbol": ticker, "from": frm, "to": today, "token": FINNHUB_API_KEY}, timeout=8)
             if r.status_code == 200:
-                headlines = [a["headline"].strip() for a in r.json()[:6] if a.get("headline")]
+                # Keep only stories actually about this company: the ticker is tagged as one of
+                # at most 3 related symbols, or it appears in the headline itself.
+                tk = ticker.upper()
+                for a in r.json():
+                    title = (a.get("headline") or "").strip()
+                    related = [x.strip().upper() for x in (a.get("related") or "").split(",") if x.strip()]
+                    about_it = (tk in related and len(related) <= 3) or re.search(rf"\b{re.escape(tk)}\b", title, re.I)
+                    if title and about_it and title not in headlines:
+                        headlines.append(title)
+                    if len(headlines) >= 4:
+                        break
             r = requests.get("https://finnhub.io/api/v1/stock/insider-transactions",
                              params={"symbol": ticker, "token": FINNHUB_API_KEY}, timeout=8)
             if r.status_code == 200:
                 txs = r.json().get("data", [])[:3]
-                insiders = "; ".join(f"{x.get('name')} ({x.get('change', 0):,} shs)" for x in txs if x.get("name")) or "none recent"
+                seen, items = set(), []
+                for x in txs:
+                    line = f"{x.get('name')} ({(x.get('change') or 0):+,} shs)"
+                    if x.get("name") and line not in seen:
+                        seen.add(line)
+                        items.append(line)
+                insiders = "; ".join(items) or "none recent"
         else:
             # Finnhub free tier doesn't cover LSE (and matching bare symbols pulls US companies), so use Yahoo
             for item in (yf.Ticker(ticker).news or [])[:6]:
@@ -364,15 +380,21 @@ def ai_commentary(c: dict, headlines: list, insiders: str, region: str) -> tuple
         try:
             import google.generativeai as genai
             genai.configure(api_key=GEMINI_API_KEY)
-            return genai.GenerativeModel(GEMINI_MODEL).generate_content(prompt).text.strip(), f"Gemini ({GEMINI_MODEL})"
+            text = (genai.GenerativeModel(GEMINI_MODEL).generate_content(prompt).text or "").strip()
+            if text:
+                return text, f"Gemini ({GEMINI_MODEL})"
         except Exception as e:
             print(f"Gemini failed: {e!r}")
     if GROQ_API_KEY:
         try:
             from groq import Groq
             out = Groq(api_key=GROQ_API_KEY).chat.completions.create(
-                model=GROQ_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3, max_tokens=400)
-            return out.choices[0].message.content.strip(), f"Groq ({GROQ_MODEL})"
+                model=GROQ_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3,
+                max_completion_tokens=2000, reasoning_effort="low")
+            text = (out.choices[0].message.content or "").strip()
+            if text:
+                return text, f"Groq ({GROQ_MODEL})"
+            print("Groq returned empty text")
         except Exception as e:
             print(f"Groq failed: {e!r}")
     return "Rule-based setup: " + ", ".join(c["why"]) + ".", "Quant rules only"
