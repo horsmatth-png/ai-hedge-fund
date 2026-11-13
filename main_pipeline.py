@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import requests
@@ -46,7 +47,7 @@ BACKUP_UNIVERSE = [
 ]
 
 def fetch_finnhub_intelligence(ticker: str):
-    """Pulls real-time company news and recent insider transactions from Finnhub."""
+    """Pulls strictly company-relevant news and recent insider transactions from Finnhub."""
     clean_symbol = ticker.replace(".L", "")
     headlines = []
     insider_notes = "No major recent insider filings."
@@ -58,14 +59,24 @@ def fetch_finnhub_intelligence(ticker: str):
         today = datetime.utcnow().strftime("%Y-%m-%d")
         three_days_ago = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
         
-        # 1. Live Company News
+        # 1. Live Company News with strict relevance check
         news_url = f"https://finnhub.io/api/v1/company-news?symbol={clean_symbol}&from={three_days_ago}&to={today}&token={FINNHUB_API_KEY}"
         news_res = requests.get(news_url, timeout=8)
         if news_res.status_code == 200:
             articles = news_res.json()
-            for art in articles[:5]:
-                if art.get("headline"):
-                    headlines.append(art["headline"])
+            for art in articles:
+                title = art.get("headline", "").strip()
+                # Ensure headline explicitly mentions ticker or clean symbol
+                if title and (clean_symbol.lower() in title.lower() or ticker.lower() in title.lower()):
+                    if title not in headlines:
+                        headlines.append(title)
+                if len(headlines) >= 4:
+                    break
+            # Fallback if strict keyword filter was too tight
+            if not headlines and articles:
+                for art in articles[:3]:
+                    if art.get("headline"):
+                        headlines.append(art["headline"])
 
         # 2. Insider Transactions (for US equities)
         if not ticker.endswith(".L"):
@@ -106,12 +117,34 @@ def fetch_market_data(ticker: str):
         print(f"⚠️ Fetch error for {ticker}: {repr(e)}")
     return None, None, 50.0, 0, 0, "No news available.", "No insider data."
 
+def calculate_confidence_score(rsi: float, vol_ratio: float, bias: str, has_shock: bool) -> int:
+    """Computes a robust institutional confidence score out of 100."""
+    score = 65
+    if bias == "BULLISH":
+        if 45 <= rsi <= 65: score += 15
+        elif rsi > 70 or rsi < 35: score -= 20
+    else: # BEARISH
+        if 35 <= rsi <= 55: score += 15
+        elif rsi < 30 or rsi > 65: score -= 20
+
+    if vol_ratio > 1.2: score += 10
+    elif vol_ratio < 0.8: score -= 5
+
+    if has_shock: score -= 35
+    return max(15, min(96, score))
+
 def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volume: float, avg_volume: float, news_summary: str, insider_summary: str, region: str = "US"):
     vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
     vwap_approx = round(price * 1.0005, 2)
     support = round(price * 0.98, 2)
     resistance = round(price * 1.02, 2)
     
+    news_lower = news_summary.lower()
+    shock_keywords = ["resign", "exit", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
+    has_shock = any(word in news_lower for word in shock_keywords)
+    
+    confidence_score = calculate_confidence_score(rsi, vol_ratio, bias, has_shock)
+
     currency = "£" if region == "UK" else "$"
     market_context = "FTSE 100 institutional rotation & London session order flow" if region == "UK" else "QQQ & SPY index trajectory; US session institutional demand"
     
@@ -124,15 +157,17 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     tp_pts = int(abs(tp_price - price) * 100)
 
     prompt = f"""
-    You are an elite quantitative hedge fund execution engine. Analyze {ticker} trading at {currency}{price} (14-day RSI: {rsi}, Initial Bias: {bias}, Volume Ratio: {vol_ratio}x).
+    You are an elite quantitative hedge fund execution engine. Analyze {ticker} trading at {currency}{price} (14-day RSI: {rsi}, Initial Bias: {bias}, Volume Ratio: {vol_ratio}x, Confidence Score: {confidence_score}/100).
     
-    LIVE FINNHUB BREAKING HEADLINES FOR {ticker}:
+    LIVE FINNHUB HEADLINES FOR {ticker}:
     "{news_summary}"
     
     LIVE FINNHUB INSIDER FILINGS:
     "{insider_summary}"
     
-    CRITICAL RULE: Base Recent Catalysts and Insider/Regulatory rows strictly on the live Finnhub data above. Never fabricate "no regulatory flags" if negative headlines appear.
+    CRITICAL RULES:
+    1. Base Recent Catalysts and Insider/Regulatory rows strictly on the live Finnhub data above. Never fabricate details.
+    2. NEVER output HTML tags like <br> — Discord displays them as raw text! Use bullet points or "/" separators instead.
     
     Use this exact concise markdown structure:
     
@@ -142,7 +177,7 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     | **Current Price** | {currency}{price} | Baseline for entry/stop |
     | **RSI (14-day)** | {rsi} | Momentum & overbought/oversold regime check |
     | **Sector Momentum** | {market_context} | Macro & sector alignment |
-    | **Recent Catalysts** | [Summarize real Finnhub headlines above] | Direct price & sentiment driver |
+    | **Recent Catalysts** | [Summarize real Finnhub headlines above cleanly] | Direct price & sentiment driver |
     | **VWAP & S/R** | VWAP: {currency}{vwap_approx} | S: {currency}{support} / R: {currency}{resistance} | Key intraday boundary levels |
     | **Insider / Regulatory** | {insider_summary} | Governance & tail-risk check |
     
@@ -189,11 +224,36 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
         except Exception as e:
             print(f"⚠️ Groq failed: {repr(e)}")
 
+    # Formatted table fallback if LLMs fail/timeout
     if not response_text:
-        response_text = f"**Analysis:** Price: {currency}{price} | RSI: {rsi} | News: {news_summary}"
-        engine_used = "Offline / Fallback"
+        response_text = f"""
+**1. Technical & News Confluence**
+| Factor | Observation | Impact |
+| :--- | :--- | :--- |
+| **Current Price** | {currency}{price} | Baseline for entry/stop |
+| **RSI (14-day)** | {rsi} | Momentum regime check |
+| **Recent Catalysts** | {news_summary[:120]} | Direct sentiment driver |
+| **VWAP & S/R** | VWAP: {currency}{vwap_approx} | S: {currency}{support} / R: {currency}{resistance} |
+| **Insider / Regulatory** | {insider_summary[:80]} | Governance check |
 
+**Synthesis:**
+Quantitative fallback triggered due to API rate limit. Price action and RSI ({rsi}) dictate a cautious structured approach aligned with baseline directional bias.
+
+---
+
+**2. Actionable IG Trade Plan**
+| Trade Component | Target | IG Point Distance | Notes |
+| :--- | :--- | :--- | :--- |
+| **Entry Zone** | {currency}{entry_low} - {currency}{entry_high} | ±50 pts | Optimal fill window |
+| **Stop-Loss (SL)** | {currency}{sl_price} | {sl_pts} pts | Risk boundary |
+| **Take-Profit (TP)** | {currency}{tp_price} | {tp_pts} pts | Objective |
+"""
+        engine_used = "Quantitative Fallback Table"
+
+    # Strip HTML tags like <br>
+    response_text = re.sub(r"<br\s*/?>", " / ", response_text, flags=re.IGNORECASE)
     response_text += f"\n\n🤖 *Engine: {engine_used} + Finnhub Live Feed*"
+    
     embed_color = 3066993 if bias == "BULLISH" else 15158332
     bot_name = "UK Dynamic Quant Engine" if region == "UK" else "AI Quant Execution Engine"
     prefix = "UK Setup Details:" if region == "UK" else "Setup Details: $"
@@ -201,8 +261,8 @@ def generate_ai_analysis(ticker: str, bias: str, price: float, rsi: float, volum
     return {
         "username": bot_name,
         "embeds": [{
-            "title": f"📊 {prefix}{ticker} ({bias})",
-            "description": f"**DIRECTIONAL_BIAS: {bias}**\n\n---\n\n{response_text[:3900]}",
+            "title": f"📊 {prefix}{ticker} ({bias}) — Score: {confidence_score}/100",
+            "description": f"**DIRECTIONAL_BIAS: {bias} | CONFIDENCE: {confidence_score}/100**\n\n---\n\n{response_text[:3900]}",
             "color": embed_color,
             "footer": {"text": f"{'Scanned' if region == 'UK' else 'Validated'} at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')} | Engine: {engine_used}"}
         }]
@@ -220,15 +280,9 @@ def run_uk_morning_scan():
             vol_ratio = round(volume / avg_volume, 2) if avg_volume > 0 else 1.0
             bias = "BULLISH" if rsi > 50 else "BEARISH"
             scanned_results.append({
-                "ticker": ticker,
-                "price": price,
-                "rsi": rsi,
-                "volume": volume,
-                "avg_volume": avg_volume,
-                "vol_ratio": vol_ratio,
-                "bias": bias,
-                "news": news_summary,
-                "insider": insider_summary
+                "ticker": ticker, "price": price, "rsi": rsi, "volume": volume, 
+                "avg_volume": avg_volume, "vol_ratio": vol_ratio, "bias": bias, 
+                "news": news_summary, "insider": insider_summary
             })
 
     scanned_results.sort(key=lambda x: x["vol_ratio"], reverse=True)
@@ -257,13 +311,13 @@ def run_us_validation():
 
         daily_change_pct = round(((live_price - prev_close) / prev_close) * 100, 2)
         news_lower = news_summary.lower()
-        shock_keywords = ["resign", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
+        shock_keywords = ["resign", "exit", "investigation", "spy", "fraud", "subpoena", "lawsuit", "sec probe", "step down"]
         has_shock_news = any(word in news_lower for word in shock_keywords)
 
         is_valid = True
-        if bias == "BULLISH" and (rsi > 70 or rsi < 35 or daily_change_pct < -3.0 or has_shock_news):
+        if bias == "BULLISH" and (rsi > 70 or rsi < 35 or daily_change_pct < -1.5 or has_shock_news):
             is_valid = False
-        elif bias == "BEARISH" and (rsi < 30 or daily_change_pct > 3.0):
+        elif bias == "BEARISH" and (rsi < 30 or daily_change_pct > 2.0):
             is_valid = False
 
         if is_valid:
@@ -282,16 +336,13 @@ def run_us_validation():
             b_price, _, b_rsi, _, _, _, _ = fetch_market_data(backup["ticker"])
             if b_price:
                 scanned_backups.append({
-                    "ticker": backup["ticker"],
-                    "name": backup["name"],
-                    "type": backup["type"],
-                    "price": b_price,
-                    "rsi": b_rsi
+                    "ticker": backup["ticker"], "name": backup["name"], "type": backup["type"],
+                    "price": b_price, "rsi": b_rsi
                 })
 
         top_3 = scanned_backups[:3]
         backup_summary = (
-            "⚠️ **Market Regime Warning: 10/10 Primary Setups Invalidated.**\n"
+            "⚠️ **Market Regime Warning: Primary Setups Invalidated.**\n"
             "The dynamic scanner has swept alternative asset classes and surfaced top live hedges:\n\n"
         )
         for asset in top_3:
