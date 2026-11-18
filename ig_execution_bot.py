@@ -624,18 +624,32 @@ def monitor_trades():
     try:
         ig_service = connect_ig()
         
-        # Explicit position / working orders fetch
+        # Robustly parse positions & working orders whether they are DataFrames, lists, or dicts
         positions = []
         try:
             pos_res = ig_service.fetch_open_positions()
-            positions = pos_res.get("positions", []) if isinstance(pos_res, dict) else (pos_res or [])
+            if isinstance(pos_res, pd.DataFrame):
+                positions = pos_res.to_dict("records")
+            elif isinstance(pos_res, dict):
+                positions = pos_res.get("positions", [])
+                if isinstance(positions, pd.DataFrame):
+                    positions = positions.to_dict("records")
+            elif isinstance(pos_res, list):
+                positions = pos_res
         except Exception as e:
             print(f"⚠️ Positions fetch warning: {e}")
 
         working = []
         try:
             work_res = ig_service.fetch_working_orders()
-            working = work_res.get("workingOrders", []) if isinstance(work_res, dict) else (work_res or [])
+            if isinstance(work_res, pd.DataFrame):
+                working = work_res.to_dict("records")
+            elif isinstance(work_res, dict):
+                working = work_res.get("workingOrders", [])
+                if isinstance(working, pd.DataFrame):
+                    working = working.to_dict("records")
+            elif isinstance(work_res, list):
+                working = work_res
         except Exception as e:
             print(f"⚠️ Working orders fetch warning: {e}")
 
