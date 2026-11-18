@@ -623,8 +623,22 @@ def monitor_trades():
 
     try:
         ig_service = connect_ig()
-        working = ig_service.fetch_working_orders().get("workingOrders", [])
-        positions = ig_service.fetch_open_positions().get("positions", [])
+        
+        # Explicit position / working orders fetch
+        positions = []
+        try:
+            pos_res = ig_service.fetch_open_positions()
+            positions = pos_res.get("positions", []) if isinstance(pos_res, dict) else (pos_res or [])
+        except Exception as e:
+            print(f"⚠️ Positions fetch warning: {e}")
+
+        working = []
+        try:
+            work_res = ig_service.fetch_working_orders()
+            working = work_res.get("workingOrders", []) if isinstance(work_res, dict) else (work_res or [])
+        except Exception as e:
+            print(f"⚠️ Working orders fetch warning: {e}")
+
         print(f"📊 Status — Working Orders: {len(working)} | Open Positions: {len(positions)}")
 
         state = load_state()
@@ -632,9 +646,9 @@ def monitor_trades():
         now_utc = datetime.utcnow()
 
         for order in working:
-            w_data = order.get("workingOrderData", {})
-            deal_id = w_data.get("dealId")
-            epic = w_data.get("epic")
+            w_data = order.get("workingOrderData", {}) if isinstance(order, dict) else getattr(order, "working_order_data", {})
+            deal_id = w_data.get("dealId") if isinstance(w_data, dict) else getattr(w_data, "deal_id", None)
+            epic = w_data.get("epic") if isinstance(w_data, dict) else getattr(w_data, "epic", None)
 
             tracked = active_orders.get(epic, {})
             ts_str = tracked.get("timestamp")
@@ -646,12 +660,12 @@ def monitor_trades():
                     print(f"🗑️ Cancelled stale working order {deal_id} ({epic}) after {age_hours:.1f}h")
 
         for pos in positions:
-            p_data = pos.get("position", {})
-            m_data = pos.get("market", {})
-            deal_id = p_data.get("dealId")
-            epic = m_data.get("epic")
-            direction = p_data.get("direction")
-            size = p_data.get("size")
+            p_data = pos.get("position", {}) if isinstance(pos, dict) else getattr(pos, "position", {})
+            m_data = pos.get("market", {}) if isinstance(pos, dict) else getattr(pos, "market", {})
+            deal_id = p_data.get("dealId") if isinstance(p_data, dict) else getattr(p_data, "deal_id", None)
+            epic = m_data.get("epic") if isinstance(m_data, dict) else getattr(m_data, "epic", None)
+            direction = p_data.get("direction") if isinstance(p_data, dict) else getattr(p_data, "direction", None)
+            size = p_data.get("size") if isinstance(p_data, dict) else getattr(p_data, "size", None)
 
             tracked = active_orders.get(epic)
             if not tracked:
