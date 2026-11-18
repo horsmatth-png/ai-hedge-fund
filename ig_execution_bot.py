@@ -32,9 +32,9 @@ IG_ACC_NUMBER = os.getenv("IG_ACC_NUMBER")
 STATE_FILE = "active_trades.json"
 MAX_TRADES_PER_REGION = 3
 
-# AI & Scanner Config
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+# AI & Scanner Config (Updated stable models)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
 SHORTLIST_SIZE = int(os.getenv("SHORTLIST_SIZE", "60"))
 ACCOUNT_SIZE = float(os.getenv("ACCOUNT_SIZE", "50000"))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
@@ -441,12 +441,11 @@ def execute_daily_trades():
                 print(f"Score error {t}: {e!r}")
 
     if not scored:
-        print(f"⚠️ No intraday data available for {region} today (market closed or pre-open).")
+        print(f"⚠️ No intraday data available for {region} today.")
         return
 
     scored.sort(key=lambda r: (r["score"], r["rel_vol"]), reverse=True)
 
-    # Shock headline filter on top candidates
     clean = []
     for r in scored[:25]:
         heads = fetch_news(r["ticker"], region)
@@ -483,8 +482,9 @@ def execute_daily_trades():
         print(f"🛑 Daily limit of {MAX_TRADES_PER_REGION} {region} orders already reached.")
         return
 
+    orders_placed = 0
     for pick in picks:
-        if state["counts"][region] >= MAX_TRADES_PER_REGION:
+        if state["counts"][region] >= MAX_TRADES_PER_REGION or orders_placed >= MAX_TRADES_PER_REGION:
             break
 
         ticker = pick["ticker"]
@@ -500,6 +500,7 @@ def execute_daily_trades():
         commentary = ai_commentary(pick, pick.get("_news", []))
 
         try:
+            print(f"Attempting IG Order for {ticker} (EPIC: {epic}) at level {entry_price:.2f}...")
             response = ig_service.create_working_order(
                 currency_code="GBP" if region == "UK" else "USD",
                 direction=direction,
@@ -523,7 +524,8 @@ def execute_daily_trades():
                 "timestamp": datetime.utcnow().isoformat()
             }
             state["counts"][region] += 1
-            print(f"🚀 Placed IG {region} Limit Order for {ticker} | Entry: {entry_price:.2f} | Ref: {deal_ref}")
+            orders_placed += 1
+            print(f"🚀 Successfully Placed IG {region} Limit Order for {ticker} | Ref: {deal_ref}")
 
             if DISCORD_WEBHOOK_URL:
                 ccy = cfg["ccy"]
@@ -537,7 +539,9 @@ def execute_daily_trades():
                 }, timeout=10)
 
         except IGException as e:
-            print(f"❌ IG Order Error for {ticker}: {e}")
+            print(f"⚠️ IG API rejected order for {ticker}: {e} (Moving to next candidate)")
+        except Exception as e:
+            print(f"⚠️ Unexpected error placing order for {ticker}: {e!r}")
 
     save_state(state)
 
