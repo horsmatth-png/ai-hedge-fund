@@ -43,9 +43,6 @@ MEGA_CAP_CAP = 2
 UA = {"User-Agent": "Mozilla/5.0 (compatible; quant-scanner/1.0)"}
 MEGA_CAPS = {"AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "AVGO"}
 
-# Spread Betting Point Conversions:
-# - US stocks: Yahoo quotes in USD ($150.25) -> IG SB quotes in cents/points (15025.0) => pts_per_unit = 100
-# - UK stocks: Yahoo quotes in pence (2450.0p) -> IG SB quotes in pence/points (2450.0) => pts_per_unit = 1
 REGION_CFG = {
     "US": {
         "tz": "America/New_York",
@@ -79,9 +76,6 @@ SHOCK_RE = re.compile(
 )
 
 
-# ----------------------------------------------------------------------------
-# State Management
-# ----------------------------------------------------------------------------
 def load_state() -> dict:
     if os.path.exists(STATE_FILE):
         try:
@@ -97,9 +91,6 @@ def save_state(state: dict):
         json.dump(state, f, indent=4)
 
 
-# ----------------------------------------------------------------------------
-# Stage 0: Universe Construction
-# ----------------------------------------------------------------------------
 def _wiki_constituents(url: str, suffix: str = "") -> dict:
     try:
         html = requests.get(url, headers=UA, timeout=20).text
@@ -139,9 +130,6 @@ def get_universe(region: str) -> dict:
     return {t: "Unknown" for t in fb}
 
 
-# ----------------------------------------------------------------------------
-# Data & Technical Indicators
-# ----------------------------------------------------------------------------
 def _split(raw, chunk):
     out = {}
     if raw is None or raw.empty:
@@ -185,9 +173,6 @@ def atr(df: pd.DataFrame, n: int = 14) -> float:
     return float(tr.rolling(n).mean().iloc[-1])
 
 
-# ----------------------------------------------------------------------------
-# Stage 1 & 2: Shortlisting & Intraday Scoring
-# ----------------------------------------------------------------------------
 def stage1_shortlist(universe: dict, cfg: dict, today) -> tuple:
     daily = batch_download(list(universe), period="4mo", interval="1d")
     rows = []
@@ -305,9 +290,6 @@ def score_intraday(t: str, d5: pd.DataFrame, dd: pd.DataFrame, today, sector: st
     }
 
 
-# ----------------------------------------------------------------------------
-# Stage 3: News, AI Commentary & Spread Betting Plan
-# ----------------------------------------------------------------------------
 def fetch_news(ticker: str, region: str) -> list:
     headlines = []
     try:
@@ -389,10 +371,6 @@ def pick_diversified(cands: list, n: int) -> list:
 
 
 def build_spread_bet_plan(c: dict, cfg: dict, region: str) -> dict:
-    """
-    Converts raw price & ATR into IG Spread Betting points (pennies/cents)
-    and enforces exact stake sizes: 0.24 for US stocks, 5.0 for UK stocks.
-    """
     sign = 1 if c["side"] == "LONG" else -1
     pts_mult = cfg["pts_per_unit"]
 
@@ -404,11 +382,7 @@ def build_spread_bet_plan(c: dict, cfg: dict, region: str) -> dict:
     sl_pts_level = price_pts - sign * risk_pts
     tp_pts_level = price_pts + sign * 2.0 * risk_pts
 
-    # Enforce strict user size rules
-    if region == "US":
-        stake = 0.24
-    else:
-        stake = 5.0
+    stake = 0.24 if region == "US" else 5.0
 
     return {
         "entry_lo": round(entry_lo_pts, 1),
@@ -458,17 +432,23 @@ def connect_ig() -> IGService:
 
     if IG_ACC_NUMBER:
         try:
-            # Explicitly pass default_account=True as required by trading_ig
             ig_service.switch_account(IG_ACC_NUMBER, default_account=True)
             print(f"✅ Successfully switched active IG session to Spread Betting account: {IG_ACC_NUMBER}")
         except Exception as e:
-            print(f"⚠️ Account switch error: {e}")
+            if "accountId-must-be-different" in str(e):
+                print(f"ℹ️ Session is already bound to target account: {IG_ACC_NUMBER}")
+            else:
+                try:
+                    ig_service.switch_account(IG_ACC_NUMBER, default_account=True)
+                    print(f"✅ Switched account via fallback: {IG_ACC_NUMBER}")
+                except Exception as inner_e:
+                    if "accountId-must-be-different" in str(inner_e):
+                        print(f"ℹ️ Session is already bound to target account: {IG_ACC_NUMBER}")
+                    else:
+                        print(f"⚠️ Account switch notice: {inner_e}")
     return ig_service
 
 
-# ----------------------------------------------------------------------------
-# Daily Execution Mode (8:30 AM UK & 3:00 PM UK)
-# ----------------------------------------------------------------------------
 def execute_daily_trades():
     print("==================================================")
     print("  🔮 RUNNING DUAL-SESSION SPREAD BETTING EXECUTION")
@@ -575,7 +555,7 @@ def execute_daily_trades():
         sign = 1 if direction == "BUY" else -1
 
         entry_pts = plan["entry_lo"] if direction == "BUY" else plan["entry_hi"]
-        stake = plan["stake"]  # 0.24 for US, 5.0 for UK
+        stake = plan["stake"]
 
         risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
         sl_pts = round(entry_pts - sign * risk_pts, 1)
@@ -632,9 +612,6 @@ def execute_daily_trades():
     save_state(state)
 
 
-# ----------------------------------------------------------------------------
-# 5-Minute Surveillance Mode (Stale Orders & Shock News Exit)
-# ----------------------------------------------------------------------------
 def monitor_trades():
     print("==================================================")
     print("  🔍 RUNNING 5-MIN IG SPREAD BET SURVEILLANCE")
