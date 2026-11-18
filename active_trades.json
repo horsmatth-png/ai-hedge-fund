@@ -2,7 +2,29 @@
     "date": "2026-11-18",
     "counts": {
         "UK": 0,
-        "US": 0
+        "US": 3
     },
-    "active_orders": {}
+    "active_orders": {
+        "SB.D.CDE.DAILY.IP": {
+            "dealReference": "PWVQXRRTU9GTYSB",
+            "ticker": "CDE",
+            "region": "US",
+            "side": "SHORT",
+            "timestamp": "2026-11-18T19:59:38.596765"
+        },
+        "SA.D.ATI.DAILY.IP": {
+            "dealReference": "Y6HJB258YP4TYSB",
+            "ticker": "ATI",
+            "region": "US",
+            "side": "LONG",
+            "timestamp": "2026-11-18T19:59:40.873469"
+        },
+        "SG.D.TJX.DAILY.IP": {
+            "dealReference": "TF86N6AK2VLTYSB",
+            "ticker": "TJX",
+            "region": "US",
+            "side": "LONG",
+            "timestamp": "2026-11-18T19:59:42.363601"
+        }
+    }
 }
