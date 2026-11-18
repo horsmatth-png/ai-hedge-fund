@@ -458,19 +458,11 @@ def connect_ig() -> IGService:
 
     if IG_ACC_NUMBER:
         try:
-            # Robust account switch handling
-            current_acc = getattr(ig_service, "account_id", None)
-            if current_acc != IG_ACC_NUMBER:
-                ig_service.switch_account(IG_ACC_NUMBER)
-                print(f"✅ Successfully switched active IG session to Spread Betting account: {IG_ACC_NUMBER}")
-            else:
-                print(f"ℹ️ Already on target account: {IG_ACC_NUMBER}")
+            # Explicitly pass default_account=True as required by trading_ig
+            ig_service.switch_account(IG_ACC_NUMBER, default_account=True)
+            print(f"✅ Successfully switched active IG session to Spread Betting account: {IG_ACC_NUMBER}")
         except Exception as e:
-            try:
-                ig_service.switch_account(IG_ACC_NUMBER)
-                print(f"✅ Switched account via fallback: {IG_ACC_NUMBER}")
-            except Exception as inner_e:
-                print(f"⚠️ Account switch notice: {inner_e}")
+            print(f"⚠️ Account switch error: {e}")
     return ig_service
 
 
