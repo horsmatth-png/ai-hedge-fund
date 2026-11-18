@@ -1,0 +1,41 @@
+name: IG Trade Monitor (Every 5 Mins)
+
+on:
+  schedule:
+    # Runs every 5 minutes, Monday-Friday
+    - cron: '*/5 * * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  monitor-trades:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests trading-ig python-dotenv numpy pandas yfinance groq google-generativeai lxml html5lib
+
+      - name: Run Trade Monitor
+        env:
+          IG_USERNAME: ${{ secrets.IG_USERNAME }}
+          IG_PASSWORD: ${{ secrets.IG_PASSWORD }}
+          IG_API_KEY: ${{ secrets.IG_API_KEY }}
+          IG_ACC_TYPE: ${{ secrets.IG_ACC_TYPE }}
+          IG_ACC_NUMBER: ${{ secrets.IG_ACC_NUMBER }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_MODE: "monitor"
+        run: python ig_execution_bot.py
