@@ -16,6 +16,7 @@ from trading_ig.rest import IGException
 
 load_dotenv()
 
+# Environment Variables & Secrets
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -25,14 +26,15 @@ IG_USERNAME = os.getenv("IG_USERNAME")
 IG_PASSWORD = os.getenv("IG_PASSWORD")
 IG_API_KEY = os.getenv("IG_API_KEY")
 IG_ACC_TYPE = os.getenv("IG_ACC_TYPE", "DEMO")
+IG_ACC_NUMBER = os.getenv("IG_ACC_NUMBER")
 
+# State & Limits
 STATE_FILE = "active_trades.json"
-MAX_TRADES_PER_DAY = 3
+MAX_TRADES_PER_REGION = 3
 
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-20b")
-
-NUM_PICKS = int(os.getenv("NUM_PICKS", "3"))  # Capped to match your max daily trades
+# AI & Scanner Config
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 SHORTLIST_SIZE = int(os.getenv("SHORTLIST_SIZE", "60"))
 ACCOUNT_SIZE = float(os.getenv("ACCOUNT_SIZE", "50000"))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
@@ -44,16 +46,24 @@ MEGA_CAPS = {"AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "A
 
 REGION_CFG = {
     "US": {"tz": "America/New_York", "ccy": "$", "scale": 1.0, "pts_per_unit": 100,
-           "min_price": 5.0, "min_value": 40e6, "bot": "AI Quant Execution Engine"},
+           "min_price": 5.0, "min_value": 40e6, "bot": "AI Quant US Execution Engine"},
     "UK": {"tz": "Europe/London", "ccy": "£", "scale": 0.01, "pts_per_unit": 1,
-           "min_price": 100.0, "min_value": 5e6, "bot": "UK Dynamic Quant Engine"},
+           "min_price": 100.0, "min_value": 5e6, "bot": "AI Quant UK Execution Engine"},
 }
 
-FALLBACK_US = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AMD", "QCOM", "JPM", "BAC", "GS"]
-FALLBACK_UK = ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L", "RIO.L", "DGE.L"]
+FALLBACK_US = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AMD", "QCOM", "JPM", "BAC", "GS",
+               "V", "MA", "BLK", "UNH", "LLY", "JNJ", "PFE", "ABBV", "CAT", "GE", "RTX", "LMT"]
+FALLBACK_UK = ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L", "RIO.L", "DGE.L", "REL.L",
+               "LLOY.L", "BARC.L", "VOD.L", "GLEN.L", "NG.L", "RR.L"]
+
+SHOCK_RE = re.compile(r"\b(resigns?|resignation|investigation|fraud|subpoena|lawsuit|sec probe|"
+                      r"step(s|ping)? down|recall|bankruptcy|halted|restat\w+|short report)\b", re.I)
 
 
-def load_state():
+# ----------------------------------------------------------------------------
+# State Management
+# ----------------------------------------------------------------------------
+def load_state() -> dict:
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r") as f:
@@ -63,15 +73,15 @@ def load_state():
     return {}
 
 
-def save_state(state):
+def save_state(state: dict):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=4)
 
 
 # ----------------------------------------------------------------------------
-# Scanner Helpers
+# Stage 0: Universe Construction
 # ----------------------------------------------------------------------------
-def _wiki_constituents(url: str, suffix: str = ""):
+def _wiki_constituents(url: str, suffix: str = "") -> dict:
     try:
         html = requests.get(url, headers=UA, timeout=20).text
         for tbl in pd.read_html(StringIO(html)):
@@ -87,8 +97,8 @@ def _wiki_constituents(url: str, suffix: str = ""):
                     continue
                 out[sym + suffix] = str(row[sec_col]) if sec_col is not None else "Unknown"
             return out
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Wiki fetch warning: {e!r}")
     return {}
 
 
@@ -101,13 +111,18 @@ def get_universe(region: str) -> dict:
         else:
             uni = _wiki_constituents("https://en.wikipedia.org/wiki/FTSE_100_Index", suffix=".L")
         if len(uni) >= 50:
+            print(f"Universe ({region}): {len(uni)} tickers loaded")
             return uni
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Universe fetch failed: {e!r}")
     fb = FALLBACK_US if region == "US" else FALLBACK_UK
+    print(f"Using fallback universe ({len(fb)} tickers)")
     return {t: "Unknown" for t in fb}
 
 
+# ----------------------------------------------------------------------------
+# Data & Technical Indicators
+# ----------------------------------------------------------------------------
 def _split(raw, chunk):
     out = {}
     if raw is None or raw.empty:
@@ -131,8 +146,8 @@ def batch_download(tickers, chunk_size=100, **kw):
         try:
             raw = yf.download(chunk, group_by="ticker", progress=False, threads=True, auto_adjust=False, **kw)
             result.update(_split(raw, chunk))
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Batch download error: {e!r}")
     return result
 
 
@@ -151,6 +166,9 @@ def atr(df: pd.DataFrame, n: int = 14) -> float:
     return float(tr.rolling(n).mean().iloc[-1])
 
 
+# ----------------------------------------------------------------------------
+# Stage 1 & 2: Shortlisting & Intraday Scoring
+# ----------------------------------------------------------------------------
 def stage1_shortlist(universe: dict, cfg: dict, today) -> tuple:
     daily = batch_download(list(universe), period="4mo", interval="1d")
     rows = []
@@ -175,6 +193,7 @@ def stage1_shortlist(universe: dict, cfg: dict, today) -> tuple:
         except Exception:
             continue
     rows.sort(key=lambda r: r["rank"], reverse=True)
+    print(f"Stage 1: {len(rows)} liquid names -> shortlisting {SHORTLIST_SIZE}")
     return [r["ticker"] for r in rows[:SHORTLIST_SIZE]], daily
 
 
@@ -228,11 +247,32 @@ def score_intraday(t: str, d5: pd.DataFrame, dd: pd.DataFrame, today, sector: st
             why.append(f"RVOL {rel_vol:.1f}x")
         if (price - vwap) * sign > 0:
             s += 20
+            why.append("above VWAP" if side == "LONG" else "below VWAP")
         if or_done:
-            if side == "LONG" and price > or_high: s += 20
-            elif side == "SHORT" and price < or_low: s += 20
-        if side == "LONG" and price > sma20 > sma50: s += 15
-        elif side == "SHORT" and price < sma20 < sma50: s += 15
+            if side == "LONG" and price > or_high:
+                s += 20
+                why.append("ORB break up")
+            elif side == "SHORT" and price < or_low:
+                s += 20
+                why.append("ORB break down")
+        if side == "LONG" and price > sma20 > sma50:
+            s += 15
+            why.append("daily uptrend")
+        elif side == "SHORT" and price < sma20 < sma50:
+            s += 15
+            why.append("daily downtrend")
+        if abs(gap_pct) >= 0.5 and gap_pct * sign > 0:
+            s += 10
+            why.append(f"gap {gap_pct:+.1f}%")
+        used = move_atr * sign
+        if 0.2 <= used <= 1.2:
+            s += 10
+        elif used > 1.8:
+            s -= 15
+            why.append("extended")
+        if (side == "LONG" and rsi > 78) or (side == "SHORT" and rsi < 22):
+            s -= 10
+            why.append(f"RSI {rsi:.0f} stretched")
         return s, why
 
     long_s, long_w = side_score("LONG")
@@ -246,35 +286,86 @@ def score_intraday(t: str, d5: pd.DataFrame, dd: pd.DataFrame, today, sector: st
     }
 
 
-def fetch_news(ticker: str, region: str):
+# ----------------------------------------------------------------------------
+# Stage 3: News, AI Commentary & Trade Plan
+# ----------------------------------------------------------------------------
+def fetch_news(ticker: str, region: str) -> list:
     headlines = []
     try:
         if region == "US" and FINNHUB_API_KEY:
             today = datetime.utcnow().strftime("%Y-%m-%d")
             frm = (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d")
-            r = requests.get("https://finnhub.io/api/v1/company-news", params={"symbol": ticker, "from": frm, "to": today, "token": FINNHUB_API_KEY}, timeout=5)
+            r = requests.get("https://finnhub.io/api/v1/company-news",
+                             params={"symbol": ticker, "from": frm, "to": today, "token": FINNHUB_API_KEY}, timeout=8)
             if r.status_code == 200:
+                tk = ticker.upper()
                 for a in r.json():
-                    if a.get("headline"): headlines.append(a["headline"])
+                    title = (a.get("headline") or "").strip()
+                    related = [x.strip().upper() for x in (a.get("related") or "").split(",") if x.strip()]
+                    about_it = (tk in related and len(related) <= 3) or re.search(rf"\b{re.escape(tk)}\b", title, re.I)
+                    if title and about_it and title not in headlines:
+                        headlines.append(title)
+                    if len(headlines) >= 4:
+                        break
         else:
-            for item in (yf.Ticker(ticker).news or [])[:4]:
+            for item in (yf.Ticker(ticker).news or [])[:5]:
                 title = (item.get("content") or {}).get("title") or item.get("title")
-                if title: headlines.append(title.strip())
-    except Exception:
-        pass
+                if title:
+                    headlines.append(title.strip())
+    except Exception as e:
+        print(f"News error {ticker}: {e!r}")
     return headlines[:4]
+
+
+def ai_commentary(c: dict, headlines: list) -> str:
+    prompt = (
+        f"You are a concise intraday trading analyst. {c['ticker']} ({c['sector']}) setup: {c['side']}. "
+        f"Price {c['price']:.2f}, VWAP {c['vwap']:.2f}, daily RSI {c['rsi']}, relative volume {c['rel_vol']}x, "
+        f"gap {c['gap_pct']}%. Signals: {', '.join(c['why']) or 'none'}.\n"
+        f"Recent headlines: {' | '.join(headlines) or 'none found'}\n\n"
+        "Write 2 short sentences explaining the technical setup and key risk. No HTML, no disclaimers."
+    )
+    if GROQ_API_KEY:
+        try:
+            from groq import Groq
+            out = Groq(api_key=GROQ_API_KEY).chat.completions.create(
+                model=GROQ_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3, max_tokens=200)
+            text = (out.choices[0].message.content or "").strip()
+            if text:
+                return text
+        except Exception as e:
+            print(f"Groq failed: {e!r}")
+    if GEMINI_API_KEY:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            text = (genai.GenerativeModel(GEMINI_MODEL).generate_content(prompt).text or "").strip()
+            if text:
+                return text
+        except Exception as e:
+            print(f"Gemini failed: {e!r}")
+    return "Rule-based setup: " + ", ".join(c["why"]) + "."
 
 
 def pick_diversified(cands: list, n: int) -> list:
     picks, sectors = [], {}
     mega = 0
     for c in cands:
-        if sectors.get(c["sector"], 0) >= MAX_PER_SECTOR and c["sector"] != "Unknown": continue
-        if c["ticker"] in MEGA_CAPS and mega >= MEGA_CAP_CAP: continue
+        if sectors.get(c["sector"], 0) >= MAX_PER_SECTOR and c["sector"] != "Unknown":
+            continue
+        if c["ticker"] in MEGA_CAPS and mega >= MEGA_CAP_CAP:
+            continue
         picks.append(c)
         sectors[c["sector"]] = sectors.get(c["sector"], 0) + 1
         mega += c["ticker"] in MEGA_CAPS
-        if len(picks) >= n: return picks
+        if len(picks) >= n:
+            return picks
+    for c in cands:
+        if c not in picks and not (c["ticker"] in MEGA_CAPS and mega >= MEGA_CAP_CAP):
+            picks.append(c)
+            mega += c["ticker"] in MEGA_CAPS
+        if len(picks) >= n:
+            break
     return picks[:n]
 
 
@@ -288,7 +379,13 @@ def build_plan(c: dict, cfg: dict) -> dict:
     risk_ccy = risk * s
     budget = ACCOUNT_SIZE * RISK_PER_TRADE_PCT / 100
     units = int(budget / risk_ccy) if risk_ccy > 0 else 1
-    return {"entry_lo": price * 0.999, "entry_hi": price * 1.001, "sl": sl, "tp": tp, "units": max(1, units)}
+    return {
+        "entry_lo": price * 0.999,
+        "entry_hi": price * 1.001,
+        "sl": sl,
+        "tp": tp,
+        "units": max(1, units)
+    }
 
 
 def map_ticker_to_epic(ticker: str, region: str) -> str:
@@ -296,66 +393,98 @@ def map_ticker_to_epic(ticker: str, region: str) -> str:
     return f"CS.D.{clean}.CASH.IP" if region == "UK" else f"CS.D.{clean}.CFD.IP"
 
 
+def connect_ig() -> IGService:
+    ig_service = IGService(IG_USERNAME, IG_PASSWORD, IG_API_KEY, IG_ACC_TYPE)
+    ig_service.create_session()
+    if IG_ACC_NUMBER:
+        ig_service.switch_account(IG_ACC_NUMBER)
+    return ig_service
+
+
 # ----------------------------------------------------------------------------
-# Main Execution & Monitoring Logic
+# Daily Execution Mode (8:30 AM UK & 3:00 PM UK)
 # ----------------------------------------------------------------------------
 def execute_daily_trades():
     print("==================================================")
-    print("  🔮 RUNNING STOCK SCAN & IG PAPER EXECUTION")
+    print("  🔮 RUNNING DUAL-SESSION QUANT SCAN & IG EXECUTION")
     print("==================================================")
 
-    region = os.getenv("REGION", "US").upper()
-    cfg = REGION_CFG.get(region, REGION_CFG["US"])
+    london_hour = datetime.now(ZoneInfo("Europe/London")).hour
+    forced_region = os.getenv("REGION", "").upper()
+
+    if forced_region in REGION_CFG:
+        region = forced_region
+    else:
+        region = "UK" if london_hour < 12 else "US"
+
+    print(f"🌍 Active Session Region: {region} (London Hour: {london_hour}:00)")
+
+    cfg = REGION_CFG[region]
     tz = ZoneInfo(cfg["tz"])
     today = datetime.now(tz).date()
 
     universe = get_universe(region)
     shortlist, daily = stage1_shortlist(universe, cfg, today)
     if not shortlist:
-        print("⚠️ No liquid candidates found.")
+        print(f"⚠️ No liquid {region} candidates found.")
         return
 
     intraday = batch_download(shortlist, chunk_size=30, period="10d", interval="5m", prepost=False)
     scored = []
     for t in shortlist:
         if t in intraday and t in daily:
-            r = score_intraday(t, intraday[t], daily[t], today, universe.get(t, "Unknown"))
-            if r: scored.append(r)
+            try:
+                r = score_intraday(t, intraday[t], daily[t], today, universe.get(t, "Unknown"))
+                if r:
+                    scored.append(r)
+            except Exception as e:
+                print(f"Score error {t}: {e!r}")
 
     if not scored:
-        print("⚠️ No intraday data available today.")
+        print(f"⚠️ No intraday data available for {region} today (market closed or pre-open).")
         return
 
     scored.sort(key=lambda r: (r["score"], r["rel_vol"]), reverse=True)
-    picks = pick_diversified(scored[:25], NUM_PICKS)
-    print(f"✅ Selected Stock Picks: {[p['ticker'] for p in picks]}")
+
+    # Shock headline filter on top candidates
+    clean = []
+    for r in scored[:25]:
+        heads = fetch_news(r["ticker"], region)
+        if any(SHOCK_RE.search(h) for h in heads):
+            print(f"Dropped {r['ticker']} (shock headline)")
+            continue
+        r["_news"] = heads
+        clean.append(r)
+
+    picks = pick_diversified(clean, MAX_TRADES_PER_REGION)
+    print(f"✅ Selected {region} Stock Picks: {[p['ticker'] for p in picks]}")
 
     if not picks:
         return
 
-    # Connect to IG
     if not IG_USERNAME or not IG_PASSWORD or not IG_API_KEY:
         print("❌ IG API credentials missing.")
         return
 
     try:
-        ig_service = IGService(IG_USERNAME, IG_PASSWORD, IG_API_KEY, IG_ACC_TYPE)
-        ig_service.create_session()
+        ig_service = connect_ig()
     except Exception as e:
         print(f"❌ Failed to connect to IG API: {e}")
         return
 
     state = load_state()
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
-    if state.get("date") != today_str:
-        state = {"date": today_str, "daily_count": 0, "active_orders": {}}
 
-    if state["daily_count"] >= MAX_TRADES_PER_DAY:
-        print("🛑 Daily limit of 3 orders already reached.")
+    if state.get("date") != today_str:
+        state = {"date": today_str, "counts": {"UK": 0, "US": 0}, "active_orders": {}}
+
+    region_count = state.setdefault("counts", {}).get(region, 0)
+    if region_count >= MAX_TRADES_PER_REGION:
+        print(f"🛑 Daily limit of {MAX_TRADES_PER_REGION} {region} orders already reached.")
         return
 
     for pick in picks:
-        if state["daily_count"] >= MAX_TRADES_PER_DAY:
+        if state["counts"][region] >= MAX_TRADES_PER_REGION:
             break
 
         ticker = pick["ticker"]
@@ -368,10 +497,11 @@ def execute_daily_trades():
         plan = build_plan(pick, cfg)
         direction = "BUY" if pick["side"] == "LONG" else "SELL"
         entry_price = plan["entry_lo"] if direction == "BUY" else plan["entry_hi"]
+        commentary = ai_commentary(pick, pick.get("_news", []))
 
         try:
             response = ig_service.create_working_order(
-                currency_code="USD" if region == "US" else "GBP",
+                currency_code="GBP" if region == "UK" else "USD",
                 direction=direction,
                 epic=epic,
                 expiry="-",
@@ -385,15 +515,26 @@ def execute_daily_trades():
             )
 
             deal_ref = response.get("dealReference")
-            state["active_orders"][epic] = {"dealReference": deal_ref, "ticker": ticker, "timestamp": datetime.utcnow().isoformat()}
-            state["daily_count"] += 1
-            print(f"🚀 Placed IG Limit Order for {ticker} | Entry: {entry_price:.2f} | Ref: {deal_ref}")
+            state["active_orders"][epic] = {
+                "dealReference": deal_ref,
+                "ticker": ticker,
+                "region": region,
+                "side": pick["side"],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+            state["counts"][region] += 1
+            print(f"🚀 Placed IG {region} Limit Order for {ticker} | Entry: {entry_price:.2f} | Ref: {deal_ref}")
 
             if DISCORD_WEBHOOK_URL:
+                ccy = cfg["ccy"]
                 requests.post(DISCORD_WEBHOOK_URL, json={
-                    "username": "IG Stock Execution Bot",
-                    "content": f"🎯 **IG Order Placed**: `{ticker}` ({pick['side']}) at `{entry_price:.2f}` | SL: `{plan['sl']:.2f}` | TP: `{plan['tp']:.2f}`"
-                })
+                    "username": cfg["bot"],
+                    "content": (
+                        f"🎯 **IG {region} Order Placed**: `{ticker}` ({pick['side']}) | Score: `{pick['score']}/100`\n"
+                        f"• **Limit Entry:** `{ccy}{entry_price:.2f}` | **SL:** `{ccy}{plan['sl']:.2f}` | **TP:** `{ccy}{plan['tp']:.2f}`\n"
+                        f"• **AI Read:** {commentary}"
+                    )
+                }, timeout=10)
 
         except IGException as e:
             print(f"❌ IG Order Error for {ticker}: {e}")
@@ -401,15 +542,81 @@ def execute_daily_trades():
     save_state(state)
 
 
+# ----------------------------------------------------------------------------
+# 5-Minute Surveillance Mode (Stale Orders & Shock News Exit)
+# ----------------------------------------------------------------------------
 def monitor_trades():
+    print("==================================================")
+    print("  🔍 RUNNING 5-MIN IG TRADE SURVEILLANCE")
+    print("==================================================")
+
+    if not IG_USERNAME or not IG_PASSWORD or not IG_API_KEY:
+        print("❌ IG API credentials missing.")
+        return
+
     try:
-        ig_service = IGService(IG_USERNAME, IG_PASSWORD, IG_API_KEY, IG_ACC_TYPE)
-        ig_service.create_session()
+        ig_service = connect_ig()
         working = ig_service.fetch_working_orders().get("workingOrders", [])
         positions = ig_service.fetch_open_positions().get("positions", [])
-        print(f"🔍 Monitor Check — Working Orders: {len(working)} | Open Positions: {len(positions)}")
+        print(f"📊 Status — Working Orders: {len(working)} | Open Positions: {len(positions)}")
+
+        state = load_state()
+        active_orders = state.get("active_orders", {})
+        now_utc = datetime.utcnow()
+
+        # 1. Cancel unfilled working orders older than 4 hours
+        for order in working:
+            w_data = order.get("workingOrderData", {})
+            deal_id = w_data.get("dealId")
+            epic = w_data.get("epic")
+
+            tracked = active_orders.get(epic, {})
+            ts_str = tracked.get("timestamp")
+            if ts_str:
+                created_dt = datetime.fromisoformat(ts_str)
+                age_hours = (now_utc - created_dt).total_seconds() / 3600.0
+                if age_hours > 4.0 and deal_id:
+                    ig_service.delete_working_order(deal_id)
+                    print(f"🗑️ Cancelled stale working order {deal_id} ({epic}) after {age_hours:.1f}h")
+
+        # 2. Check open positions for breaking shock headlines
+        for pos in positions:
+            p_data = pos.get("position", {})
+            m_data = pos.get("market", {})
+            deal_id = p_data.get("dealId")
+            epic = m_data.get("epic")
+            direction = p_data.get("direction")
+            size = p_data.get("size")
+
+            tracked = active_orders.get(epic)
+            if not tracked:
+                continue
+
+            ticker = tracked.get("ticker")
+            region = tracked.get("region", "US")
+            heads = fetch_news(ticker, region)
+
+            if any(SHOCK_RE.search(h) for h in heads):
+                close_dir = "SELL" if direction == "BUY" else "BUY"
+                ig_service.close_open_position(
+                    deal_id=deal_id,
+                    direction=close_dir,
+                    epic=epic,
+                    expiry="-",
+                    order_type="MARKET",
+                    size=size
+                )
+                print(f"🚨 Shock news detected for {ticker}! Closed position {deal_id} immediately.")
+                if DISCORD_WEBHOOK_URL:
+                    requests.post(DISCORD_WEBHOOK_URL, json={
+                        "username": "IG Risk Guard",
+                        "content": f"🚨 **EMERGENCY EXIT**: Closed `{ticker}` ({direction}) due to breaking shock headline: *{heads[0]}*"
+                    }, timeout=10)
+
     except IGException as e:
-        print(f"⚠️ Error during monitor check: {e}")
+        print(f"⚠️ IG API Monitor Error: {e}")
+    except Exception as e:
+        print(f"⚠️ Monitor Error: {e!r}")
 
 
 if __name__ == "__main__":
