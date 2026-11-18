@@ -1,6 +1,5 @@
 import os
 import re
-import sys
 import json
 from datetime import datetime, timedelta
 from io import StringIO
@@ -32,11 +31,11 @@ IG_ACC_NUMBER = os.getenv("IG_ACC_NUMBER")
 STATE_FILE = "active_trades.json"
 MAX_TRADES_PER_REGION = 3
 
-# AI & Scanner Config (Updated stable models)
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+# AI & Scanner Config
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 SHORTLIST_SIZE = int(os.getenv("SHORTLIST_SIZE", "60"))
-ACCOUNT_SIZE = float(os.getenv("ACCOUNT_SIZE", "50000"))
+ACCOUNT_SIZE_GBP = float(os.getenv("ACCOUNT_SIZE", "50000"))  # Spread betting account in GBP
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
 MAX_PER_SECTOR = 1
 MEGA_CAP_CAP = 2
@@ -44,11 +43,28 @@ MEGA_CAP_CAP = 2
 UA = {"User-Agent": "Mozilla/5.0 (compatible; quant-scanner/1.0)"}
 MEGA_CAPS = {"AAPL", "MSFT", "GOOGL", "GOOG", "AMZN", "META", "NVDA", "TSLA", "AVGO"}
 
+# Spread Betting Point Conversions:
+# - US stocks: Yahoo quotes in USD ($150.25) -> IG SB quotes in cents/points (15025.0) => pts_per_unit = 100
+# - UK stocks: Yahoo quotes in pence (2450.0p) -> IG SB quotes in pence/points (2450.0) => pts_per_unit = 1
 REGION_CFG = {
-    "US": {"tz": "America/New_York", "ccy": "$", "scale": 1.0, "pts_per_unit": 100,
-           "min_price": 5.0, "min_value": 40e6, "bot": "AI Quant US Execution Engine"},
-    "UK": {"tz": "Europe/London", "ccy": "£", "scale": 0.01, "pts_per_unit": 1,
-           "min_price": 100.0, "min_value": 5e6, "bot": "AI Quant UK Execution Engine"},
+    "US": {
+        "tz": "America/New_York",
+        "ccy": "$",
+        "scale": 1.0,
+        "pts_per_unit": 100.0,
+        "min_price": 5.0,
+        "min_value": 40e6,
+        "bot": "IG Spread Bet US Engine",
+    },
+    "UK": {
+        "tz": "Europe/London",
+        "ccy": "£",
+        "scale": 0.01,
+        "pts_per_unit": 1.0,
+        "min_price": 100.0,
+        "min_value": 5e6,
+        "bot": "IG Spread Bet UK Engine",
+    },
 }
 
 FALLBACK_US = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AMD", "QCOM", "JPM", "BAC", "GS",
@@ -56,8 +72,11 @@ FALLBACK_US = ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AMD", "QCOM", "
 FALLBACK_UK = ["SHEL.L", "AZN.L", "HSBA.L", "ULVR.L", "BP.L", "GSK.L", "RIO.L", "DGE.L", "REL.L",
                "LLOY.L", "BARC.L", "VOD.L", "GLEN.L", "NG.L", "RR.L"]
 
-SHOCK_RE = re.compile(r"\b(resigns?|resignation|investigation|fraud|subpoena|lawsuit|sec probe|"
-                      r"step(s|ping)? down|recall|bankruptcy|halted|restat\w+|short report)\b", re.I)
+SHOCK_RE = re.compile(
+    r"\b(resigns?|resignation|investigation|fraud|subpoena|lawsuit|sec probe|"
+    r"step(s|ping)? down|recall|bankruptcy|halted|restat\w+|short report)\b",
+    re.I,
+)
 
 
 # ----------------------------------------------------------------------------
@@ -287,7 +306,7 @@ def score_intraday(t: str, d5: pd.DataFrame, dd: pd.DataFrame, today, sector: st
 
 
 # ----------------------------------------------------------------------------
-# Stage 3: News, AI Commentary & Trade Plan
+# Stage 3: News, AI Commentary & Spread Betting Plan
 # ----------------------------------------------------------------------------
 def fetch_news(ticker: str, region: str) -> list:
     headlines = []
@@ -369,35 +388,87 @@ def pick_diversified(cands: list, n: int) -> list:
     return picks[:n]
 
 
-def build_plan(c: dict, cfg: dict) -> dict:
+def build_spread_bet_plan(c: dict, cfg: dict) -> dict:
+    """
+    Converts raw price & ATR into IG Spread Betting points (pennies/cents)
+    and calculates stake size in £/point based on GBP risk budget.
+    """
     sign = 1 if c["side"] == "LONG" else -1
-    risk = 0.4 * c["atr"]
-    price = c["price"]
-    sl = price - sign * risk
-    tp = price + sign * 2 * risk
-    s = cfg["scale"]
-    risk_ccy = risk * s
-    budget = ACCOUNT_SIZE * RISK_PER_TRADE_PCT / 100
-    units = int(budget / risk_ccy) if risk_ccy > 0 else 1
+    pts_mult = cfg["pts_per_unit"]  # 100 for US ($ -> cents/pts), 1 for UK (already pence/pts)
+
+    price_pts = c["price"] * pts_mult
+    risk_pts = max(1.0, 0.4 * c["atr"] * pts_mult)  # Stop distance in IG points
+
+    entry_lo_pts = price_pts * 0.999
+    entry_hi_pts = price_pts * 1.001
+    sl_pts_level = price_pts - sign * risk_pts
+    tp_pts_level = price_pts + sign * 2.0 * risk_pts
+
+    # Risk budget in GBP -> Stake in £ per point
+    budget_gbp = ACCOUNT_SIZE_GBP * (RISK_PER_TRADE_PCT / 100.0)
+    raw_stake = budget_gbp / risk_pts
+    stake_gbp_per_pt = max(0.5, round(raw_stake, 2))  # IG minimum equity spread bet is typically £0.50-£1/pt
+
     return {
-        "entry_lo": price * 0.999,
-        "entry_hi": price * 1.001,
-        "sl": sl,
-        "tp": tp,
-        "units": max(1, units)
+        "entry_lo": round(entry_lo_pts, 1),
+        "entry_hi": round(entry_hi_pts, 1),
+        "sl_level": round(sl_pts_level, 1),
+        "tp_level": round(tp_pts_level, 1),
+        "risk_pts": round(risk_pts, 1),
+        "stake": stake_gbp_per_pt,
     }
 
 
-def map_ticker_to_epic(ticker: str, region: str) -> str:
+def resolve_spread_bet_epic(ig_service: IGService, ticker: str, region: str) -> dict | None:
+    """
+    Queries IG's search_markets endpoint on the active Spread Betting account
+    to find the exact DFB (Daily Funded Bet) EPIC and minimum deal size.
+    """
     clean = ticker.replace(".L", "").upper()
-    return f"CS.D.{clean}.CASH.IP" if region == "UK" else f"CS.D.{clean}.CFD.IP"
+    try:
+        res = ig_service.search_markets(clean)
+        markets = res.get("markets", []) if isinstance(res, dict) else res.to_dict("records")
+
+        # Prioritize exact DFB (Daily Funded Bet) equity match
+        for m in markets:
+            epic = str(m.get("epic", ""))
+            expiry = str(m.get("expiry", ""))
+            instr_type = str(m.get("instrumentType", ""))
+            status = str(m.get("marketStatus", ""))
+
+            if expiry == "DFB" and "SHARES" in instr_type and status == "TRADEABLE":
+                # Verify country/currency alignment
+                if region == "UK" and ".L" in ticker and ("UK" in epic or "KA." in epic or "LSE" in str(m.get("instrumentName", ""))):
+                    return {"epic": epic, "name": m.get("instrumentName")}
+                if region == "US" and ".L" not in ticker and ("UA." in epic or "UC." in epic or "US" in str(m.get("instrumentName", ""))):
+                    return {"epic": epic, "name": m.get("instrumentName")}
+
+        # Secondary fallback: any tradeable DFB share matching the ticker
+        for m in markets:
+            epic = str(m.get("epic", ""))
+            if str(m.get("expiry", "")) == "DFB" and "SHARES" in str(m.get("instrumentType", "")):
+                return {"epic": epic, "name": m.get("instrumentName")}
+
+    except Exception as e:
+        print(f"⚠️ Market search failed for {ticker}: {e!r}")
+
+    # Deterministic fallback if search returns empty
+    return {
+        "epic": f"KA.D.{clean}.DAILY.IP" if region == "UK" else f"UA.D.{clean}.DAILY.IP",
+        "name": clean,
+    }
 
 
 def connect_ig() -> IGService:
     ig_service = IGService(IG_USERNAME, IG_PASSWORD, IG_API_KEY, IG_ACC_TYPE)
     ig_service.create_session()
+
     if IG_ACC_NUMBER:
-        ig_service.switch_account(IG_ACC_NUMBER)
+        try:
+            ig_service.switch_account(IG_ACC_NUMBER, default_account=True)
+            print(f"✅ Switched active IG session to Spread Betting account: {IG_ACC_NUMBER}")
+        except Exception as e:
+            print(f"ℹ️ Account switch notice for {IG_ACC_NUMBER}: {e}")
     return ig_service
 
 
@@ -406,7 +477,7 @@ def connect_ig() -> IGService:
 # ----------------------------------------------------------------------------
 def execute_daily_trades():
     print("==================================================")
-    print("  🔮 RUNNING DUAL-SESSION QUANT SCAN & IG EXECUTION")
+    print("  🔮 RUNNING DUAL-SESSION SPREAD BETTING EXECUTION")
     print("==================================================")
 
     london_hour = datetime.now(ZoneInfo("Europe/London")).hour
@@ -455,10 +526,11 @@ def execute_daily_trades():
         r["_news"] = heads
         clean.append(r)
 
-    picks = pick_diversified(clean, MAX_TRADES_PER_REGION)
-    print(f"✅ Selected {region} Stock Picks: {[p['ticker'] for p in picks]}")
+    # Keep top 8 candidates so if IG doesn't offer DFB on one mid-cap, we fall through to the next
+    candidates = pick_diversified(clean, 8)
+    print(f"📋 Ranked {region} Candidates: {[p['ticker'] for p in candidates]}")
 
-    if not picks:
+    if not candidates:
         return
 
     if not IG_USERNAME or not IG_PASSWORD or not IG_API_KEY:
@@ -479,40 +551,62 @@ def execute_daily_trades():
 
     region_count = state.setdefault("counts", {}).get(region, 0)
     if region_count >= MAX_TRADES_PER_REGION:
-        print(f"🛑 Daily limit of {MAX_TRADES_PER_REGION} {region} orders already reached.")
+        print(f"🛑 Daily limit of {MAX_TRADES_PER_REGION} {region} spread bets already reached.")
         return
 
-    orders_placed = 0
-    for pick in picks:
-        if state["counts"][region] >= MAX_TRADES_PER_REGION or orders_placed >= MAX_TRADES_PER_REGION:
+    for pick in candidates:
+        if state["counts"][region] >= MAX_TRADES_PER_REGION:
             break
 
         ticker = pick["ticker"]
-        epic = map_ticker_to_epic(ticker, region)
-
-        if epic in state["active_orders"]:
-            print(f"🔁 Skipping {ticker}: Already processed today.")
+        market_info = resolve_spread_bet_epic(ig_service, ticker, region)
+        if not market_info:
+            print(f"⚠️ No tradeable DFB spread bet market found on IG for {ticker}, skipping...")
             continue
 
-        plan = build_plan(pick, cfg)
+        epic = market_info["epic"]
+        if epic in state["active_orders"]:
+            print(f"🔁 Skipping {ticker} ({epic}): Already processed today.")
+            continue
+
+        # Fetch live IG market details to respect IG's exact minimum stake & minimum stop distance
+        try:
+            details = ig_service.fetch_market_by_epic(epic)
+            rules = details.get("dealingRules", {})
+            min_size = float(rules.get("minDealSize", {}).get("value", 1.0))
+            min_stop_dist = float(rules.get("minNormalStopOrLimitDistance", {}).get("value", 5.0))
+        except Exception as e:
+            print(f"⚠️ Could not fetch dealing rules for {epic} ({e}), skipping...")
+            continue
+
+        plan = build_spread_bet_plan(pick, cfg)
         direction = "BUY" if pick["side"] == "LONG" else "SELL"
-        entry_price = plan["entry_lo"] if direction == "BUY" else plan["entry_hi"]
+        sign = 1 if direction == "BUY" else -1
+
+        entry_pts = plan["entry_lo"] if direction == "BUY" else plan["entry_hi"]
+        stake = max(min_size, plan["stake"])
+
+        # Enforce IG's minimum stop/limit distance in points
+        risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
+        sl_pts = round(entry_pts - sign * risk_pts, 1)
+        tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
+
         commentary = ai_commentary(pick, pick.get("_news", []))
 
         try:
-            print(f"Attempting IG Order for {ticker} (EPIC: {epic}) at level {entry_price:.2f}...")
+            print(f"Attempting IG Spread Bet for {ticker} ({epic}) | {direction} £{stake}/pt @ {entry_pts} pts...")
             response = ig_service.create_working_order(
-                currency_code="GBP" if region == "UK" else "USD",
+                currency_code="GBP",          # Always GBP for UK Spread Betting
                 direction=direction,
                 epic=epic,
-                expiry="-",
-                level=round(entry_price, 2),
+                expiry="DFB",                 # Mandatory for Daily Funded Spread Bets
+                level=round(entry_pts, 1),
                 order_type="LIMIT",
-                size=plan["units"],
+                size=round(stake, 2),
                 time_in_force="GOOD_TILL_CANCELLED",
                 guaranteed_stop=False,
-                stop_level=round(plan["sl"], 2),
-                limit_level=round(plan["tp"], 2)
+                stop_level=sl_pts,
+                limit_level=tp_pts,
             )
 
             deal_ref = response.get("dealReference")
@@ -521,27 +615,29 @@ def execute_daily_trades():
                 "ticker": ticker,
                 "region": region,
                 "side": pick["side"],
-                "timestamp": datetime.utcnow().isoformat()
+                "timestamp": datetime.utcnow().isoformat(),
             }
             state["counts"][region] += 1
-            orders_placed += 1
-            print(f"🚀 Successfully Placed IG {region} Limit Order for {ticker} | Ref: {deal_ref}")
+            print(f"🚀 Placed IG {region} Spread Bet for {ticker} ({epic}) | Ref: {deal_ref}")
 
             if DISCORD_WEBHOOK_URL:
-                ccy = cfg["ccy"]
-                requests.post(DISCORD_WEBHOOK_URL, json={
-                    "username": cfg["bot"],
-                    "content": (
-                        f"🎯 **IG {region} Order Placed**: `{ticker}` ({pick['side']}) | Score: `{pick['score']}/100`\n"
-                        f"• **Limit Entry:** `{ccy}{entry_price:.2f}` | **SL:** `{ccy}{plan['sl']:.2f}` | **TP:** `{ccy}{plan['tp']:.2f}`\n"
-                        f"• **AI Read:** {commentary}"
-                    )
-                }, timeout=10)
+                requests.post(
+                    DISCORD_WEBHOOK_URL,
+                    json={
+                        "username": cfg["bot"],
+                        "content": (
+                            f"🎯 **IG {region} Spread Bet Placed**: `{ticker}` ({pick['side']}) | Score: `{pick['score']}/100`\n"
+                            f"• **Stake:** `£{stake:.2f}/pt` | **Entry:** `{entry_pts:.1f} pts` | **SL:** `{sl_pts:.1f}` | **TP:** `{tp_pts:.1f}`\n"
+                            f"• **AI Read:** {commentary}"
+                        ),
+                    },
+                    timeout=10,
+                )
 
         except IGException as e:
-            print(f"⚠️ IG API rejected order for {ticker}: {e} (Moving to next candidate)")
+            print(f"⚠️ IG API rejected spread bet for {ticker} ({epic}): {e} (Trying next candidate)")
         except Exception as e:
-            print(f"⚠️ Unexpected error placing order for {ticker}: {e!r}")
+            print(f"⚠️ Unexpected error placing spread bet for {ticker}: {e!r}")
 
     save_state(state)
 
@@ -551,7 +647,7 @@ def execute_daily_trades():
 # ----------------------------------------------------------------------------
 def monitor_trades():
     print("==================================================")
-    print("  🔍 RUNNING 5-MIN IG TRADE SURVEILLANCE")
+    print("  🔍 RUNNING 5-MIN IG SPREAD BET SURVEILLANCE")
     print("==================================================")
 
     if not IG_USERNAME or not IG_PASSWORD or not IG_API_KEY:
@@ -605,17 +701,21 @@ def monitor_trades():
                 ig_service.close_open_position(
                     deal_id=deal_id,
                     direction=close_dir,
-                    epic=epic,
-                    expiry="-",
+                    epic=None,
+                    expiry=None,
                     order_type="MARKET",
-                    size=size
+                    size=size,
                 )
-                print(f"🚨 Shock news detected for {ticker}! Closed position {deal_id} immediately.")
+                print(f"🚨 Shock news detected for {ticker}! Closed spread bet {deal_id} immediately.")
                 if DISCORD_WEBHOOK_URL:
-                    requests.post(DISCORD_WEBHOOK_URL, json={
-                        "username": "IG Risk Guard",
-                        "content": f"🚨 **EMERGENCY EXIT**: Closed `{ticker}` ({direction}) due to breaking shock headline: *{heads[0]}*"
-                    }, timeout=10)
+                    requests.post(
+                        DISCORD_WEBHOOK_URL,
+                        json={
+                            "username": "IG Risk Guard",
+                            "content": f"🚨 **EMERGENCY EXIT**: Closed `{ticker}` ({direction}) due to breaking shock headline: *{heads[0]}*",
+                        },
+                        timeout=10,
+                    )
 
     except IGException as e:
         print(f"⚠️ IG API Monitor Error: {e}")
