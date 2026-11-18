@@ -31,11 +31,11 @@ IG_ACC_NUMBER = os.getenv("IG_ACC_NUMBER")
 STATE_FILE = "active_trades.json"
 MAX_TRADES_PER_REGION = 3
 
-# AI & Scanner Config
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# AI & Scanner Config (Updated with active models)
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 SHORTLIST_SIZE = int(os.getenv("SHORTLIST_SIZE", "60"))
-ACCOUNT_SIZE_GBP = float(os.getenv("ACCOUNT_SIZE", "50000"))  # Spread betting account in GBP
+ACCOUNT_SIZE_GBP = float(os.getenv("ACCOUNT_SIZE", "50000"))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
 MAX_PER_SECTOR = 1
 MEGA_CAP_CAP = 2
@@ -388,26 +388,27 @@ def pick_diversified(cands: list, n: int) -> list:
     return picks[:n]
 
 
-def build_spread_bet_plan(c: dict, cfg: dict) -> dict:
+def build_spread_bet_plan(c: dict, cfg: dict, region: str) -> dict:
     """
     Converts raw price & ATR into IG Spread Betting points (pennies/cents)
-    and calculates stake size in £/point based on GBP risk budget.
+    and enforces exact stake sizes: 0.24 for US stocks, 5.0 for UK stocks.
     """
     sign = 1 if c["side"] == "LONG" else -1
-    pts_mult = cfg["pts_per_unit"]  # 100 for US ($ -> cents/pts), 1 for UK (already pence/pts)
+    pts_mult = cfg["pts_per_unit"]
 
     price_pts = c["price"] * pts_mult
-    risk_pts = max(1.0, 0.4 * c["atr"] * pts_mult)  # Stop distance in IG points
+    risk_pts = max(1.0, 0.4 * c["atr"] * pts_mult)
 
     entry_lo_pts = price_pts * 0.999
     entry_hi_pts = price_pts * 1.001
     sl_pts_level = price_pts - sign * risk_pts
     tp_pts_level = price_pts + sign * 2.0 * risk_pts
 
-    # Risk budget in GBP -> Stake in £ per point
-    budget_gbp = ACCOUNT_SIZE_GBP * (RISK_PER_TRADE_PCT / 100.0)
-    raw_stake = budget_gbp / risk_pts
-    stake_gbp_per_pt = max(0.5, round(raw_stake, 2))  # IG minimum equity spread bet is typically £0.50-£1/pt
+    # Enforce strict user size rules
+    if region == "US":
+        stake = 0.24
+    else:
+        stake = 5.0
 
     return {
         "entry_lo": round(entry_lo_pts, 1),
@@ -415,21 +416,16 @@ def build_spread_bet_plan(c: dict, cfg: dict) -> dict:
         "sl_level": round(sl_pts_level, 1),
         "tp_level": round(tp_pts_level, 1),
         "risk_pts": round(risk_pts, 1),
-        "stake": stake_gbp_per_pt,
+        "stake": stake,
     }
 
 
 def resolve_spread_bet_epic(ig_service: IGService, ticker: str, region: str) -> dict | None:
-    """
-    Queries IG's search_markets endpoint on the active Spread Betting account
-    to find the exact DFB (Daily Funded Bet) EPIC and minimum deal size.
-    """
     clean = ticker.replace(".L", "").upper()
     try:
         res = ig_service.search_markets(clean)
         markets = res.get("markets", []) if isinstance(res, dict) else res.to_dict("records")
 
-        # Prioritize exact DFB (Daily Funded Bet) equity match
         for m in markets:
             epic = str(m.get("epic", ""))
             expiry = str(m.get("expiry", ""))
@@ -437,13 +433,11 @@ def resolve_spread_bet_epic(ig_service: IGService, ticker: str, region: str) -> 
             status = str(m.get("marketStatus", ""))
 
             if expiry == "DFB" and "SHARES" in instr_type and status == "TRADEABLE":
-                # Verify country/currency alignment
                 if region == "UK" and ".L" in ticker and ("UK" in epic or "KA." in epic or "LSE" in str(m.get("instrumentName", ""))):
                     return {"epic": epic, "name": m.get("instrumentName")}
                 if region == "US" and ".L" not in ticker and ("UA." in epic or "UC." in epic or "US" in str(m.get("instrumentName", ""))):
                     return {"epic": epic, "name": m.get("instrumentName")}
 
-        # Secondary fallback: any tradeable DFB share matching the ticker
         for m in markets:
             epic = str(m.get("epic", ""))
             if str(m.get("expiry", "")) == "DFB" and "SHARES" in str(m.get("instrumentType", "")):
@@ -452,7 +446,6 @@ def resolve_spread_bet_epic(ig_service: IGService, ticker: str, region: str) -> 
     except Exception as e:
         print(f"⚠️ Market search failed for {ticker}: {e!r}")
 
-    # Deterministic fallback if search returns empty
     return {
         "epic": f"KA.D.{clean}.DAILY.IP" if region == "UK" else f"UA.D.{clean}.DAILY.IP",
         "name": clean,
@@ -526,7 +519,6 @@ def execute_daily_trades():
         r["_news"] = heads
         clean.append(r)
 
-    # Keep top 8 candidates so if IG doesn't offer DFB on one mid-cap, we fall through to the next
     candidates = pick_diversified(clean, 8)
     print(f"📋 Ranked {region} Candidates: {[p['ticker'] for p in candidates]}")
 
@@ -569,24 +561,21 @@ def execute_daily_trades():
             print(f"🔁 Skipping {ticker} ({epic}): Already processed today.")
             continue
 
-        # Fetch live IG market details to respect IG's exact minimum stake & minimum stop distance
         try:
             details = ig_service.fetch_market_by_epic(epic)
             rules = details.get("dealingRules", {})
-            min_size = float(rules.get("minDealSize", {}).get("value", 1.0))
             min_stop_dist = float(rules.get("minNormalStopOrLimitDistance", {}).get("value", 5.0))
         except Exception as e:
             print(f"⚠️ Could not fetch dealing rules for {epic} ({e}), skipping...")
             continue
 
-        plan = build_spread_bet_plan(pick, cfg)
+        plan = build_spread_bet_plan(pick, cfg, region)
         direction = "BUY" if pick["side"] == "LONG" else "SELL"
         sign = 1 if direction == "BUY" else -1
 
         entry_pts = plan["entry_lo"] if direction == "BUY" else plan["entry_hi"]
-        stake = max(min_size, plan["stake"])
+        stake = plan["stake"]  # 0.24 for US, 5.0 for UK
 
-        # Enforce IG's minimum stop/limit distance in points
         risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
         sl_pts = round(entry_pts - sign * risk_pts, 1)
         tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
@@ -596,10 +585,10 @@ def execute_daily_trades():
         try:
             print(f"Attempting IG Spread Bet for {ticker} ({epic}) | {direction} £{stake}/pt @ {entry_pts} pts...")
             response = ig_service.create_working_order(
-                currency_code="GBP",          # Always GBP for UK Spread Betting
+                currency_code="GBP",
                 direction=direction,
                 epic=epic,
-                expiry="DFB",                 # Mandatory for Daily Funded Spread Bets
+                expiry="DFB",
                 level=round(entry_pts, 1),
                 order_type="LIMIT",
                 size=round(stake, 2),
@@ -664,7 +653,6 @@ def monitor_trades():
         active_orders = state.get("active_orders", {})
         now_utc = datetime.utcnow()
 
-        # 1. Cancel unfilled working orders older than 4 hours
         for order in working:
             w_data = order.get("workingOrderData", {})
             deal_id = w_data.get("dealId")
@@ -679,7 +667,6 @@ def monitor_trades():
                     ig_service.delete_working_order(deal_id)
                     print(f"🗑️ Cancelled stale working order {deal_id} ({epic}) after {age_hours:.1f}h")
 
-        # 2. Check open positions for breaking shock headlines
         for pos in positions:
             p_data = pos.get("position", {})
             m_data = pos.get("market", {})
