@@ -1,0 +1,55 @@
+name: IG Dual-Session Trade Execution (UK 8:30 & US 15:00)
+
+on:
+  schedule:
+    # 08:30 UTC (08:30 UK GMT) - UK & Europe Stock Scan (3 trades max)
+    - cron: '30 8 * * 1-5'
+    # 15:00 UTC (15:00 UK GMT) - US Stock Scan (3 trades max)
+    - cron: '0 15 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Force region (UK or US) - leave blank for auto time detection'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  execute-trades:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests trading-ig python-dotenv numpy pandas yfinance groq google-generativeai lxml html5lib
+
+      - name: Run Session Scan & Execution
+        env:
+          IG_USERNAME: ${{ secrets.IG_USERNAME }}
+          IG_PASSWORD: ${{ secrets.IG_PASSWORD }}
+          IG_API_KEY: ${{ secrets.IG_API_KEY }}
+          IG_ACC_TYPE: ${{ secrets.IG_ACC_TYPE }}
+          IG_ACC_NUMBER: ${{ secrets.IG_ACC_NUMBER }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+          FINNHUB_KEY: ${{ secrets.FINNHUB_KEY }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_MODE: "execute_daily"
+          REGION: ${{ github.event.inputs.region }}
+        run: python ig_execution_bot.py
+
+      - name: Commit and push state update
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update active trades state file"
+          file_pattern: active_trades.json
