@@ -33,7 +33,7 @@ MAX_TRADES_PER_REGION = 3
 
 # AI & Scanner Config
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 SHORTLIST_SIZE = int(os.getenv("SHORTLIST_SIZE", "60"))
 ACCOUNT_SIZE_GBP = float(os.getenv("ACCOUNT_SIZE", "50000"))
 RISK_PER_TRADE_PCT = float(os.getenv("RISK_PER_TRADE_PCT", "0.5"))
@@ -488,6 +488,25 @@ def connect_ig() -> IGService:
     return ig_service
 
 
+def log_deal_confirmation(ig_service: IGService, deal_ref: str, ticker: str):
+    if not deal_ref:
+        print(f"⚠️ No dealReference returned for {ticker}")
+        return
+    try:
+        conf = ig_service.fetch_deal_by_deal_reference(deal_ref)
+        data = conf.to_dict() if hasattr(conf, "to_dict") and not isinstance(conf, dict) else conf
+        if isinstance(data, dict):
+            status = data.get("dealStatus") or data.get("status") or "UNKNOWN"
+            reason = data.get("reason") or ""
+            deal_id = data.get("dealId") or ""
+            pos_status = data.get("status") if "dealStatus" in data else ""
+            print(f"📩 IG Confirm [{ticker} | {deal_ref}]: dealStatus={status} | dealId={deal_id} | status={pos_status} | reason={reason}")
+        else:
+            print(f"📩 IG Confirm [{ticker} | {deal_ref}]: {data}")
+    except Exception as e:
+        print(f"⚠️ Could not fetch deal confirmation for {ticker} ({deal_ref}): {e!r}")
+
+
 def execute_daily_trades():
     print("==================================================")
     print("  🔮 RUNNING DUAL-SESSION SPREAD BETTING EXECUTION")
@@ -618,7 +637,9 @@ def execute_daily_trades():
                 limit_level=tp_pts,
             )
 
-            deal_ref = response.get("dealReference")
+            deal_ref = response.get("dealReference") if isinstance(response, dict) else getattr(response, "dealReference", None)
+            log_deal_confirmation(ig_service, deal_ref, ticker)
+
             state["active_orders"][epic] = {
                 "dealReference": deal_ref,
                 "ticker": ticker,
