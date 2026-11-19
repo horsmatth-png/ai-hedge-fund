@@ -1,7 +1,7 @@
 {
     "date": "2026-11-19",
     "counts": {
-        "UK": 1,
+        "UK": 3,
         "US": 0
     },
     "active_orders": {
@@ -11,6 +11,20 @@
             "region": "UK",
             "side": "SHORT",
             "timestamp": "2026-11-19T10:47:53.972046"
+        },
+        "KA.D.AAL.DAILY.IP": {
+            "dealReference": "8PDH6YFQT5YTYSB",
+            "ticker": "AAL.L",
+            "region": "UK",
+            "side": "LONG",
+            "timestamp": "2026-11-19T10:54:14.457120"
+        },
+        "KA.D.BRBY.DAILY.IP": {
+            "dealReference": "MCMCASV58LTYSB",
+            "ticker": "BRBY.L",
+            "region": "UK",
+            "side": "LONG",
+            "timestamp": "2026-11-19T10:54:25.990124"
         }
     },
     "risk_alerts": {}
