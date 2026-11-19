@@ -502,23 +502,13 @@ def ai_cherrypick_opportunities(candidates: list, max_picks: int = 5) -> list:
 
     prompt = (
         "You are an equity portfolio strategist running a £1,000 long-only UK & US strategy at 3pm UK time. "
-        "Cherry-pick the top opportunities that combine:
-"
-        "1) Short-term day-trade pullback quality (VWAP/EMA pullback bounce + relative volume),
-"
-        "2) Swing & long-term fundamentals (cash flow, balance sheet, growth, trend),
-"
-        "3) News catalysts & news risk (favor constructive catalysts, penalize legal/regulatory/earnings headwinds).
-
-"
-        f"Candidates JSON:
-{json.dumps(compact)}
-
-"
-        f"Return STRICT JSON only (no markdown fences) with schema:
-"
-        f'{{"picks": [{{"idx": <int>, "horizon": "SHORT_AND_LONG" | "SWING_LONG" | "DAY_PULLBACK", "reason": "<1 concise sentence>"}}]}}
-'
+        "Cherry-pick the top opportunities that combine:\n"
+        "1) Short-term day-trade pullback quality (VWAP/EMA pullback bounce + relative volume),\n"
+        "2) Swing & long-term fundamentals (cash flow, balance sheet, growth, trend),\n"
+        "3) News catalysts & news risk (favor constructive catalysts, penalize legal/regulatory/earnings headwinds).\n\n"
+        f"Candidates JSON:\n{json.dumps(compact)}\n\n"
+        "Return STRICT JSON only (no markdown fences) with schema:\n"
+        '{"picks": [{"idx": <int>, "horizon": "SHORT_AND_LONG" | "SWING_LONG" | "DAY_PULLBACK", "reason": "<1 concise sentence>"}]}\n'
         f"Select at most {max_picks} best names in priority order."
     )
 
@@ -558,14 +548,10 @@ def ai_cherrypick_opportunities(candidates: list, max_picks: int = 5) -> list:
 def ai_position_check(ticker: str, qty: float, entry_gbp: float, curr_gbp: float, stop_gbp: float, target_gbp: float, headlines: list) -> tuple[bool, str]:
     pnl_pct = ((curr_gbp - entry_gbp) / entry_gbp * 100.0) if entry_gbp else 0.0
     prompt = (
-        f"You are a risk analyst auditing a LONG swing/pullback stock position in {ticker} ({qty:.4f} sh).
-"
+        f"You are a risk analyst auditing a LONG swing/pullback stock position in {ticker} ({qty:.4f} sh).\n"
         f"Entry: £{entry_gbp:.2f}, Current: £{curr_gbp:.2f} ({pnl_pct:+.2f}%), "
-        f"Stop: £{stop_gbp:.2f}, Target: £{target_gbp:.2f}.
-"
-        f"Headlines (short & long-term impact): {' | '.join(headlines) or 'No breaking news'}
-
-"
+        f"Stop: £{stop_gbp:.2f}, Target: £{target_gbp:.2f}.\n"
+        f"Headlines (short & long-term impact): {' | '.join(headlines) or 'No breaking news'}\n\n"
         "Start with 'HEALTHY:' or 'AT_RISK:'. Then write 1 concise sentence on thesis & news risk. No HTML."
     )
     text = _call_ai(prompt, max_tokens=140)
@@ -1105,6 +1091,10 @@ def monitor_swing_trades():
 
 
 if __name__ == "__main__":
+    try:
+        os.environ.setdefault("PYTHONUNBUFFERED", "1")
+    except Exception:
+        pass
     mode = os.getenv("RUN_MODE", "monitor")
     if mode == "execute_3pm":
         execute_swing_3pm_uk_us()
