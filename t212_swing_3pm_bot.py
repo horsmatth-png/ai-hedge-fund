@@ -121,12 +121,23 @@ def post_discord(username: str, content: str):
         print(f"Discord webhook warning: {e!r}")
 
 
+def _to_float(val) -> float:
+    if isinstance(val, pd.Series):
+        val = val.dropna().iloc[-1] if not val.dropna().empty else np.nan
+    elif isinstance(val, np.ndarray):
+        val = val.ravel()[-1] if val.size > 0 else np.nan
+    return float(val)
+
+
 def get_fx_to_gbp() -> float:
     """Returns USD-to-GBP multiplier."""
     try:
         df = yf.download("GBPUSD=X", period="5d", interval="1d", progress=False, auto_adjust=False)
         if df is not None and not df.empty:
-            gbp_usd = float(df["Close"].dropna().iloc[-1])
+            close_col = df["Close"]
+            if isinstance(close_col, pd.DataFrame):
+                close_col = close_col.iloc[:, 0]
+            gbp_usd = _to_float(close_col.dropna())
             if gbp_usd > 0:
                 return 1.0 / gbp_usd
     except Exception as e:
@@ -442,6 +453,7 @@ def fetch_news(ticker: str, region: str) -> list:
 
 
 def _call_ai(prompt: str, max_tokens: int = 400) -> str:
+    # Try Groq first (avoids Gemini free-tier daily quota exhaustion)
     if GROQ_API_KEY:
         try:
             from groq import Groq
@@ -456,11 +468,13 @@ def _call_ai(prompt: str, max_tokens: int = 400) -> str:
                 return text
         except Exception as e:
             print(f"Groq failed: {e!r}")
+    # Fallback to Gemini if Groq is unavailable or fails
     if GEMINI_API_KEY:
         try:
-            import google.generativeai as genai
-            genai.configure(api_key=GEMINI_API_KEY)
-            text = (genai.GenerativeModel(GEMINI_MODEL).generate_content(prompt).text or "").strip()
+            from google import genai as google_genai
+            client = google_genai.Client(api_key=GEMINI_API_KEY)
+            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+            text = (getattr(resp, "text", None) or "").strip()
             if text:
                 return text
         except Exception as e:
@@ -685,17 +699,38 @@ class Trading212Client:
         self._request("DELETE", f"/equity/orders/{order_id}")
         return True
 
+    _instruments_cache_mem = None
+
+    def _get_instruments_list(self) -> list:
+        if Trading212Client._instruments_cache_mem is not None:
+            return Trading212Client._instruments_cache_mem
+        # Rate-limit friendly: fetch once and cache in memory + disk
+        all_cache = load_json(INSTRUMENT_CACHE_FILE, {})
+        instruments = all_cache.get("_all_instruments")
+        if isinstance(instruments, list) and instruments:
+            Trading212Client._instruments_cache_mem = instruments
+            return instruments
+        time.sleep(1.5)
+        fetched = self._request("GET", "/equity/metadata/instruments")
+        if isinstance(fetched, list) and fetched:
+            Trading212Client._instruments_cache_mem = fetched
+            all_cache["_all_instruments"] = fetched
+            save_json(INSTRUMENT_CACHE_FILE, all_cache)
+            return fetched
+        return []
+
     def resolve_t212_ticker(self, yf_ticker: str, region: str) -> str | None:
         cache = load_json(INSTRUMENT_CACHE_FILE, {})
         if yf_ticker in cache:
             return cache[yf_ticker]
 
+        guess = f"{yf_ticker.replace('.L', '')}l_EQ" if region == "UK" else f"{yf_ticker}_US_EQ"
         if not self.is_configured():
-            return f"{yf_ticker.replace('.L', '')}l_EQ" if region == "UK" else f"{yf_ticker}_US_EQ"
+            return guess
 
         try:
-            instruments = self._request("GET", "/equity/metadata/instruments")
-            if isinstance(instruments, list) and instruments:
+            instruments = self._get_instruments_list()
+            if instruments:
                 clean = yf_ticker.replace(".L", "").upper()
                 for inst in instruments:
                     t212_sym = str(inst.get("ticker", ""))
@@ -715,16 +750,30 @@ class Trading212Client:
         except Exception as e:
             print(f"⚠️ T212 instrument lookup warning for {yf_ticker}: {e!r}")
 
-        return None
+        # Fallback to standard T212 symbol format if metadata endpoint rate-limits
+        return guess
+
+    @staticmethod
+    def _clean_qty(quantity: float, decimals: int = 4) -> float:
+        return round(abs(float(quantity)), decimals)
 
     def place_long_market_buy(self, t212_ticker: str, quantity: float) -> dict:
         if not REQUIRE_STOP_LOSS:
             raise ValueError("REQUIRE_STOP_LOSS must remain True")
+        qty = self._clean_qty(quantity, 4)
         if self.dry_run or not self.is_configured():
             fake_id = f"SIM-BUY-{int(datetime.utcnow().timestamp())}"
-            print(f"[DRY_RUN] T212 BUY {quantity} {t212_ticker} (MARKET) -> {fake_id}")
+            print(f"[DRY_RUN] T212 BUY {qty} {t212_ticker} (MARKET) -> {fake_id}")
             return {"id": fake_id, "status": "SIMULATED"}
-        return self._request("POST", "/equity/orders/market", {"ticker": t212_ticker, "quantity": abs(quantity)})
+        # Try 4 decimals first, then 2 decimals if T212 rejects quantity precision
+        for prec in (4, 2):
+            q = self._clean_qty(quantity, prec)
+            try:
+                return self._request("POST", "/equity/orders/market", {"ticker": t212_ticker, "quantity": q})
+            except RuntimeError as err:
+                if "quantity-precision-mismatch" in str(err) and prec == 4:
+                    continue
+                raise
 
     def place_protective_stop_sell(self, t212_ticker: str, quantity: float, stop_price: float) -> dict:
         """
@@ -732,27 +781,29 @@ class Trading212Client:
         """
         if stop_price is None or stop_price <= 0:
             raise ValueError(f"Refusing to place trade without valid stop_price on {t212_ticker}")
+        qty = self._clean_qty(quantity, 4)
         if self.dry_run or not self.is_configured():
             fake_id = f"SIM-STOP-{int(datetime.utcnow().timestamp())}"
-            print(f"[DRY_RUN] T212 SELL STOP {-abs(quantity)} {t212_ticker} @ {stop_price} -> {fake_id}")
+            print(f"[DRY_RUN] T212 SELL STOP {-qty} {t212_ticker} @ {stop_price} -> {fake_id}")
             return {"id": fake_id, "status": "SIMULATED"}
         return self._request(
             "POST",
             "/equity/orders/stop",
             {
                 "ticker": t212_ticker,
-                "quantity": -abs(quantity),
-                "stopPrice": stop_price,
+                "quantity": -qty,
+                "stopPrice": round(float(stop_price), 2),
                 "timeValidity": "GOOD_TILL_CANCEL",
             },
         )
 
     def place_market_sell(self, t212_ticker: str, quantity: float) -> dict:
+        qty = self._clean_qty(quantity, 4)
         if self.dry_run or not self.is_configured():
             fake_id = f"SIM-SELL-{int(datetime.utcnow().timestamp())}"
-            print(f"[DRY_RUN] T212 SELL {-abs(quantity)} {t212_ticker} (MARKET) -> {fake_id}")
+            print(f"[DRY_RUN] T212 SELL {-qty} {t212_ticker} (MARKET) -> {fake_id}")
             return {"id": fake_id, "status": "SIMULATED"}
-        return self._request("POST", "/equity/orders/market", {"ticker": t212_ticker, "quantity": -abs(quantity)})
+        return self._request("POST", "/equity/orders/market", {"ticker": t212_ticker, "quantity": -qty})
 
 
 def _scan_region_candidates(region: str) -> list:
