@@ -517,6 +517,33 @@ def _extract_min_stop_dist(details) -> float:
     return float(getattr(raw_min, "value", 5.0))
 
 
+def _place_ig_working_order(
+    ig_service: IGService,
+    epic: str,
+    direction: str,
+    entry_pts: float,
+    stake: float,
+    sl_pts: float | None,
+    tp_pts: float | None,
+):
+    kwargs = {
+        "currency_code": "GBP",
+        "direction": direction,
+        "epic": epic,
+        "expiry": "DFB",
+        "level": entry_pts,
+        "order_type": "LIMIT",
+        "size": round(stake, 2),
+        "time_in_force": "GOOD_TILL_CANCELLED",
+        "guaranteed_stop": False,
+    }
+    if sl_pts is not None:
+        kwargs["stop_level"] = sl_pts
+    if tp_pts is not None:
+        kwargs["limit_level"] = tp_pts
+    return ig_service.create_working_order(**kwargs)
+
+
 def execute_daily_trades():
     print("==================================================")
     print("  🔮 RUNNING DUAL-SESSION SPREAD BETTING EXECUTION")
@@ -625,8 +652,7 @@ def execute_daily_trades():
         stake = plan["stake"]
 
         if region == "UK":
-            # UK-only wider buffer & direction validation to avoid ATTACHED_ORDER_LEVEL_ERROR
-            risk_pts = max(plan["risk_pts"], min_stop_dist * 1.5, entry_pts * 0.005)
+            risk_pts = max(plan["risk_pts"], min_stop_dist * 2.0, entry_pts * 0.015)
             sl_pts = round(entry_pts - sign * risk_pts, 1)
             tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
 
@@ -637,7 +663,6 @@ def execute_daily_trades():
                 sl_pts = round(entry_pts + risk_pts, 1)
                 tp_pts = round(entry_pts - 2.0 * risk_pts, 1)
         else:
-            # US keeps standard stop/limit distance calculation
             risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
             sl_pts = round(entry_pts - sign * risk_pts, 1)
             tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
@@ -646,24 +671,37 @@ def execute_daily_trades():
 
         try:
             print(f"Attempting IG Spread Bet for {ticker} ({epic}) | {direction} £{stake}/pt @ {entry_pts} pts (SL={sl_pts}, TP={tp_pts})...")
-            response = ig_service.create_working_order(
-                currency_code="GBP",
-                direction=direction,
+            response = _place_ig_working_order(
+                ig_service=ig_service,
                 epic=epic,
-                expiry="DFB",
-                level=entry_pts,
-                order_type="LIMIT",
-                size=round(stake, 2),
-                time_in_force="GOOD_TILL_CANCELLED",
-                guaranteed_stop=False,
-                stop_level=sl_pts,
-                limit_level=tp_pts,
+                direction=direction,
+                entry_pts=entry_pts,
+                stake=stake,
+                sl_pts=sl_pts,
+                tp_pts=tp_pts,
             )
 
             deal_ref = response.get("dealReference") if isinstance(response, dict) else getattr(response, "dealReference", None)
 
             if region == "UK":
-                deal_status, _ = fetch_deal_confirmation(ig_service, deal_ref, ticker)
+                deal_status, conf_data = fetch_deal_confirmation(ig_service, deal_ref, ticker)
+                reason = str((conf_data or {}).get("reason") or "")
+
+                if deal_status == "REJECTED" and "ATTACHED_ORDER_LEVEL_ERROR" in reason:
+                    print(f"↩️ Retrying UK spread bet for {ticker} ({epic}) without attached SL/TP after ATTACHED_ORDER_LEVEL_ERROR...")
+                    response = _place_ig_working_order(
+                        ig_service=ig_service,
+                        epic=epic,
+                        direction=direction,
+                        entry_pts=entry_pts,
+                        stake=stake,
+                        sl_pts=None,
+                        tp_pts=None,
+                    )
+                    deal_ref = response.get("dealReference") if isinstance(response, dict) else getattr(response, "dealReference", None)
+                    deal_status, _ = fetch_deal_confirmation(ig_service, deal_ref, ticker)
+                    sl_pts, tp_pts = None, None
+
                 if deal_status == "REJECTED":
                     print(f"⛔ UK spread bet rejected by IG for {ticker} ({epic}); not counting toward daily limit.")
                     continue
@@ -680,6 +718,9 @@ def execute_daily_trades():
             state["counts"][region] += 1
             print(f"🚀 Placed IG {region} Spread Bet for {ticker} ({epic}) | Ref: {deal_ref}")
 
+            sl_display = f"{sl_pts:.1f}" if sl_pts is not None else "None"
+            tp_display = f"{tp_pts:.1f}" if tp_pts is not None else "None"
+
             if DISCORD_WEBHOOK_URL:
                 requests.post(
                     DISCORD_WEBHOOK_URL,
@@ -687,7 +728,7 @@ def execute_daily_trades():
                         "username": cfg["bot"],
                         "content": (
                             f"🎯 **IG {region} Spread Bet Placed**: `{ticker}` ({pick['side']}) | Score: `{pick['score']}/100`\n"
-                            f"• **Stake:** `£{stake:.2f}/pt` | **Entry:** `{entry_pts:.1f} pts` | **SL:** `{sl_pts:.1f}` | **TP:** `{tp_pts:.1f}`\n"
+                            f"• **Stake:** `£{stake:.2f}/pt` | **Entry:** `{entry_pts:.1f} pts` | **SL:** `{sl_display}` | **TP:** `{tp_display}`\n"
                             f"• **AI Read:** {commentary}"
                         ),
                     },
