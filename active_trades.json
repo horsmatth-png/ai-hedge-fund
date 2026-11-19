@@ -1,30 +1,31 @@
 {
-    "date": "2026-11-18",
+    "date": "2026-11-19",
     "counts": {
-        "UK": 0,
-        "US": 3
+        "UK": 3,
+        "US": 0
     },
     "active_orders": {
-        "SB.D.CDE.DAILY.IP": {
-            "dealReference": "PWVQXRRTU9GTYSB",
-            "ticker": "CDE",
-            "region": "US",
+        "KA.D.MROLN.DAILY.IP": {
+            "dealReference": "HUSEHUM78UTYSB",
+            "ticker": "MRO.L",
+            "region": "UK",
+            "side": "LONG",
+            "timestamp": "2026-11-19T10:21:14.330901"
+        },
+        "KA.D.BATS.DAILY.IP": {
+            "dealReference": "TAC43W7CHLQTYSB",
+            "ticker": "BATS.L",
+            "region": "UK",
             "side": "SHORT",
-            "timestamp": "2026-11-18T19:59:38.596765"
+            "timestamp": "2026-11-19T10:21:15.295262"
         },
-        "SA.D.ATI.DAILY.IP": {
-            "dealReference": "Y6HJB258YP4TYSB",
-            "ticker": "ATI",
-            "region": "US",
+        "KA.D.GLEN.DAILY.IP": {
+            "dealReference": "Y643LVJD2F4TYSB",
+            "ticker": "GLEN.L",
+            "region": "UK",
             "side": "LONG",
-            "timestamp": "2026-11-18T19:59:40.873469"
-        },
-        "SG.D.TJX.DAILY.IP": {
-            "dealReference": "TF86N6AK2VLTYSB",
-            "ticker": "TJX",
-            "region": "US",
-            "side": "LONG",
-            "timestamp": "2026-11-18T19:59:42.363601"
+            "timestamp": "2026-11-19T10:27:39.827722"
         }
-    }
+    },
+    "risk_alerts": {}
 }
