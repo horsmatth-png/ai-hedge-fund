@@ -488,23 +488,33 @@ def connect_ig() -> IGService:
     return ig_service
 
 
-def log_deal_confirmation(ig_service: IGService, deal_ref: str, ticker: str):
+def fetch_deal_confirmation(ig_service: IGService, deal_ref: str, ticker: str) -> tuple[str, dict]:
     if not deal_ref:
         print(f"⚠️ No dealReference returned for {ticker}")
-        return
+        return "UNKNOWN", {}
     try:
         conf = ig_service.fetch_deal_by_deal_reference(deal_ref)
         data = conf.to_dict() if hasattr(conf, "to_dict") and not isinstance(conf, dict) else conf
         if isinstance(data, dict):
-            status = data.get("dealStatus") or data.get("status") or "UNKNOWN"
+            status = str(data.get("dealStatus") or data.get("status") or "UNKNOWN").upper()
             reason = data.get("reason") or ""
             deal_id = data.get("dealId") or ""
             pos_status = data.get("status") if "dealStatus" in data else ""
             print(f"📩 IG Confirm [{ticker} | {deal_ref}]: dealStatus={status} | dealId={deal_id} | status={pos_status} | reason={reason}")
-        else:
-            print(f"📩 IG Confirm [{ticker} | {deal_ref}]: {data}")
+            return status, data
+        print(f"📩 IG Confirm [{ticker} | {deal_ref}]: {data}")
+        return "UNKNOWN", {}
     except Exception as e:
         print(f"⚠️ Could not fetch deal confirmation for {ticker} ({deal_ref}): {e!r}")
+        return "UNKNOWN", {}
+
+
+def _extract_min_stop_dist(details) -> float:
+    rules = details.get("dealingRules", {}) if isinstance(details, dict) else getattr(details, "dealingRules", {})
+    raw_min = rules.get("minNormalStopOrLimitDistance", {}) if isinstance(rules, dict) else getattr(rules, "minNormalStopOrLimitDistance", {})
+    if isinstance(raw_min, dict):
+        return float(raw_min.get("value", 5.0))
+    return float(getattr(raw_min, "value", 5.0))
 
 
 def execute_daily_trades():
@@ -602,8 +612,7 @@ def execute_daily_trades():
 
         try:
             details = ig_service.fetch_market_by_epic(epic)
-            rules = details.get("dealingRules", {})
-            min_stop_dist = float(rules.get("minNormalStopOrLimitDistance", {}).get("value", 5.0))
+            min_stop_dist = _extract_min_stop_dist(details)
         except Exception as e:
             print(f"⚠️ Could not fetch dealing rules for {epic} ({e}), skipping...")
             continue
@@ -612,23 +621,37 @@ def execute_daily_trades():
         direction = "BUY" if pick["side"] == "LONG" else "SELL"
         sign = 1 if direction == "BUY" else -1
 
-        entry_pts = plan["entry_lo"] if direction == "BUY" else plan["entry_hi"]
+        entry_pts = round(plan["entry_lo"] if direction == "BUY" else plan["entry_hi"], 1)
         stake = plan["stake"]
 
-        risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
-        sl_pts = round(entry_pts - sign * risk_pts, 1)
-        tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
+        if region == "UK":
+            # UK-only wider buffer & direction validation to avoid ATTACHED_ORDER_LEVEL_ERROR
+            risk_pts = max(plan["risk_pts"], min_stop_dist * 1.5, entry_pts * 0.005)
+            sl_pts = round(entry_pts - sign * risk_pts, 1)
+            tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
+
+            if direction == "BUY" and not (sl_pts < entry_pts < tp_pts):
+                sl_pts = round(entry_pts - risk_pts, 1)
+                tp_pts = round(entry_pts + 2.0 * risk_pts, 1)
+            elif direction == "SELL" and not (tp_pts < entry_pts < sl_pts):
+                sl_pts = round(entry_pts + risk_pts, 1)
+                tp_pts = round(entry_pts - 2.0 * risk_pts, 1)
+        else:
+            # US keeps standard stop/limit distance calculation
+            risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
+            sl_pts = round(entry_pts - sign * risk_pts, 1)
+            tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
 
         commentary = ai_commentary(pick, pick.get("_news", []))
 
         try:
-            print(f"Attempting IG Spread Bet for {ticker} ({epic}) | {direction} £{stake}/pt @ {entry_pts} pts...")
+            print(f"Attempting IG Spread Bet for {ticker} ({epic}) | {direction} £{stake}/pt @ {entry_pts} pts (SL={sl_pts}, TP={tp_pts})...")
             response = ig_service.create_working_order(
                 currency_code="GBP",
                 direction=direction,
                 epic=epic,
                 expiry="DFB",
-                level=round(entry_pts, 1),
+                level=entry_pts,
                 order_type="LIMIT",
                 size=round(stake, 2),
                 time_in_force="GOOD_TILL_CANCELLED",
@@ -638,7 +661,14 @@ def execute_daily_trades():
             )
 
             deal_ref = response.get("dealReference") if isinstance(response, dict) else getattr(response, "dealReference", None)
-            log_deal_confirmation(ig_service, deal_ref, ticker)
+
+            if region == "UK":
+                deal_status, _ = fetch_deal_confirmation(ig_service, deal_ref, ticker)
+                if deal_status == "REJECTED":
+                    print(f"⛔ UK spread bet rejected by IG for {ticker} ({epic}); not counting toward daily limit.")
+                    continue
+            else:
+                fetch_deal_confirmation(ig_service, deal_ref, ticker)
 
             state["active_orders"][epic] = {
                 "dealReference": deal_ref,
