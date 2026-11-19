@@ -31,7 +31,7 @@ IG_ACC_NUMBER = os.getenv("IG_ACC_NUMBER")
 STATE_FILE = "active_trades.json"
 MAX_TRADES_PER_REGION = 3
 
-# AI & Scanner Config (Updated with active models)
+# AI & Scanner Config
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 SHORTLIST_SIZE = int(os.getenv("SHORTLIST_SIZE", "60"))
@@ -318,19 +318,12 @@ def fetch_news(ticker: str, region: str) -> list:
     return headlines[:4]
 
 
-def ai_commentary(c: dict, headlines: list) -> str:
-    prompt = (
-        f"You are a concise intraday trading analyst. {c['ticker']} ({c['sector']}) setup: {c['side']}. "
-        f"Price {c['price']:.2f}, VWAP {c['vwap']:.2f}, daily RSI {c['rsi']}, relative volume {c['rel_vol']}x, "
-        f"gap {c['gap_pct']}%. Signals: {', '.join(c['why']) or 'none'}.\n"
-        f"Recent headlines: {' | '.join(headlines) or 'none found'}\n\n"
-        "Write 2 short sentences explaining the technical setup and key risk. No HTML, no disclaimers."
-    )
+def _call_ai(prompt: str, max_tokens: int = 200) -> str:
     if GROQ_API_KEY:
         try:
             from groq import Groq
             out = Groq(api_key=GROQ_API_KEY).chat.completions.create(
-                model=GROQ_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.3, max_tokens=200)
+                model=GROQ_MODEL, messages=[{"role": "user", "content": prompt}], temperature=0.2, max_tokens=max_tokens)
             text = (out.choices[0].message.content or "").strip()
             if text:
                 return text
@@ -345,7 +338,61 @@ def ai_commentary(c: dict, headlines: list) -> str:
                 return text
         except Exception as e:
             print(f"Gemini failed: {e!r}")
-    return "Rule-based setup: " + ", ".join(c["why"]) + "."
+    return ""
+
+
+def ai_commentary(c: dict, headlines: list) -> str:
+    prompt = (
+        f"You are a concise intraday trading analyst. {c['ticker']} ({c['sector']}) setup: {c['side']}. "
+        f"Price {c['price']:.2f}, VWAP {c['vwap']:.2f}, daily RSI {c['rsi']}, relative volume {c['rel_vol']}x, "
+        f"gap {c['gap_pct']}%. Signals: {', '.join(c['why']) or 'none'}.\n"
+        f"Recent headlines: {' | '.join(headlines) or 'none found'}\n\n"
+        "Write 2 short sentences explaining the technical setup and key risk. No HTML, no disclaimers."
+    )
+    text = _call_ai(prompt, max_tokens=200)
+    return text if text else "Rule-based setup: " + ", ".join(c["why"]) + "."
+
+
+def ai_position_check(ticker: str, direction: str, open_lvl: float, curr_lvl: float, stop_lvl, limit_lvl, headlines: list) -> tuple[bool, str]:
+    """
+    Uses AI to audit an active open position against current levels and breaking headlines.
+    Returns (is_at_risk, summary_text).
+    """
+    move_pct = ((curr_lvl - open_lvl) / open_lvl * 100.0) if open_lvl else 0.0
+    signed_move = move_pct if direction == "BUY" else -move_pct
+
+    prompt = (
+        f"You are a risk surveillance analyst auditing an active {direction} spread bet on {ticker}.\n"
+        f"Entry level: {open_lvl}, Current level: {curr_lvl} (directional move: {signed_move:+.2f}%), "
+        f"Stop: {stop_lvl}, Limit: {limit_lvl}.\n"
+        f"Latest headlines: {' | '.join(headlines) or 'No breaking news'}\n\n"
+        "Start your reply with exactly 'HEALTHY:' or 'AT_RISK:'. "
+        "Then write 1 concise sentence assessing if any headline or price action threatens the trade thesis. No HTML."
+    )
+    text = _call_ai(prompt, max_tokens=140)
+    if not text:
+        return False, f"HEALTHY: No adverse news detected (move {signed_move:+.2f}%)."
+
+    at_risk = text.upper().startswith("AT_RISK")
+    return at_risk, text
+
+
+def infer_ticker_from_epic(epic: str, market_name: str = "") -> tuple[str, str]:
+    """
+    Maps an IG spread betting epic (e.g., KA.D.CRDA.DAILY.IP or UA.D.AVGO.DAILY.IP)
+    back to a Yahoo/Finnhub ticker and region ('UK' or 'US').
+    """
+    parts = (epic or "").split(".")
+    symbol = parts[2].upper() if len(parts) >= 3 else ""
+    is_uk = (
+        epic.startswith(("KA.", "KB.", "IX."))
+        or "UK" in epic.upper()
+        or "PLC" in (market_name or "").upper()
+        or "LSE" in (market_name or "").upper()
+    )
+    region = "UK" if is_uk else "US"
+    ticker = f"{symbol}.L" if (region == "UK" and symbol and not symbol.endswith(".L")) else symbol
+    return ticker, region
 
 
 def pick_diversified(cands: list, n: int) -> list:
@@ -520,7 +567,7 @@ def execute_daily_trades():
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     if state.get("date") != today_str:
-        state = {"date": today_str, "counts": {"UK": 0, "US": 0}, "active_orders": {}}
+        state = {"date": today_str, "counts": {"UK": 0, "US": 0}, "active_orders": {}, "risk_alerts": {}}
 
     region_count = state.setdefault("counts", {}).get(region, 0)
     if region_count >= MAX_TRADES_PER_REGION:
@@ -623,8 +670,7 @@ def monitor_trades():
 
     try:
         ig_service = connect_ig()
-        
-        # Robustly parse positions & working orders whether they are DataFrames, lists, or dicts
+
         positions = []
         try:
             pos_res = ig_service.fetch_open_positions()
@@ -656,13 +702,16 @@ def monitor_trades():
         print(f"📊 Status — Working Orders: {len(working)} | Open Positions: {len(positions)}")
 
         state = load_state()
-        active_orders = state.get("active_orders", {})
+        active_orders = state.setdefault("active_orders", {})
+        risk_alerts = state.setdefault("risk_alerts", {})
         now_utc = datetime.utcnow()
+        state_dirty = False
 
+        # 1. Cancel stale working orders older than 4 hours
         for order in working:
-            w_data = order.get("workingOrderData", {}) if isinstance(order, dict) else getattr(order, "working_order_data", {})
-            deal_id = w_data.get("dealId") if isinstance(w_data, dict) else getattr(w_data, "deal_id", None)
-            epic = w_data.get("epic") if isinstance(w_data, dict) else getattr(w_data, "epic", None)
+            w_data = order.get("workingOrderData", {}) if isinstance(order, dict) else {}
+            deal_id = w_data.get("dealId") or order.get("dealId")
+            epic = w_data.get("epic") or order.get("epic")
 
             tracked = active_orders.get(epic, {})
             ts_str = tracked.get("timestamp")
@@ -673,22 +722,38 @@ def monitor_trades():
                     ig_service.delete_working_order(deal_id)
                     print(f"🗑️ Cancelled stale working order {deal_id} ({epic}) after {age_hours:.1f}h")
 
+        # 2. Audit ALL open positions with news + AI risk check
         for pos in positions:
-            p_data = pos.get("position", {}) if isinstance(pos, dict) else getattr(pos, "position", {})
-            m_data = pos.get("market", {}) if isinstance(pos, dict) else getattr(pos, "market", {})
-            deal_id = p_data.get("dealId") if isinstance(p_data, dict) else getattr(p_data, "deal_id", None)
-            epic = m_data.get("epic") if isinstance(m_data, dict) else getattr(m_data, "epic", None)
-            direction = p_data.get("direction") if isinstance(p_data, dict) else getattr(p_data, "direction", None)
-            size = p_data.get("size") if isinstance(p_data, dict) else getattr(p_data, "size", None)
+            p_data = pos.get("position", {}) if isinstance(pos.get("position"), dict) else pos
+            m_data = pos.get("market", {}) if isinstance(pos.get("market"), dict) else pos
+
+            deal_id = p_data.get("dealId")
+            epic = m_data.get("epic") or p_data.get("epic")
+            market_name = m_data.get("instrumentName", "")
+            direction = p_data.get("direction")
+            size = p_data.get("size")
+            open_lvl = float(p_data.get("level") or p_data.get("openLevel") or 0.0)
+            stop_lvl = p_data.get("stopLevel")
+            limit_lvl = p_data.get("limitLevel")
+
+            bid = float(m_data.get("bid") or open_lvl)
+            offer = float(m_data.get("offer") or open_lvl)
+            curr_lvl = bid if direction == "BUY" else offer
 
             tracked = active_orders.get(epic)
-            if not tracked:
+            if tracked:
+                ticker = tracked.get("ticker")
+                region = tracked.get("region", "US")
+            else:
+                ticker, region = infer_ticker_from_epic(epic or "", market_name)
+
+            if not ticker:
+                print(f"⚠️ Could not resolve ticker for position {deal_id} ({epic}), skipping...")
                 continue
 
-            ticker = tracked.get("ticker")
-            region = tracked.get("region", "US")
             heads = fetch_news(ticker, region)
 
+            # Hard shock-news emergency exit
             if any(SHOCK_RE.search(h) for h in heads):
                 close_dir = "SELL" if direction == "BUY" else "BUY"
                 ig_service.close_open_position(
@@ -709,6 +774,47 @@ def monitor_trades():
                         },
                         timeout=10,
                     )
+                continue
+
+            # AI position health & risk assessment
+            at_risk, ai_verdict = ai_position_check(
+                ticker=ticker,
+                direction=direction,
+                open_lvl=open_lvl,
+                curr_lvl=curr_lvl,
+                stop_lvl=stop_lvl,
+                limit_lvl=limit_lvl,
+                headlines=heads,
+            )
+            icon = "⚠️" if at_risk else "✅"
+            print(f"{icon} [{ticker} | {direction} £{size}/pt @ {open_lvl} -> {curr_lvl}] {ai_verdict}")
+
+            # Throttle Discord risk warnings to at most once per hour per deal_id
+            if at_risk and DISCORD_WEBHOOK_URL:
+                last_alert_str = risk_alerts.get(deal_id)
+                should_alert = True
+                if last_alert_str:
+                    mins_since = (now_utc - datetime.fromisoformat(last_alert_str)).total_seconds() / 60.0
+                    should_alert = mins_since >= 60.0
+
+                if should_alert:
+                    requests.post(
+                        DISCORD_WEBHOOK_URL,
+                        json={
+                            "username": "IG Risk Guard",
+                            "content": (
+                                f"⚠️ **AI Position Risk Warning**: `{ticker}` ({direction} `£{size}/pt`)\n"
+                                f"• **Entry:** `{open_lvl}` | **Current:** `{curr_lvl}` | **Stop:** `{stop_lvl}`\n"
+                                f"• **Assessment:** {ai_verdict}"
+                            ),
+                        },
+                        timeout=10,
+                    )
+                    risk_alerts[deal_id] = now_utc.isoformat()
+                    state_dirty = True
+
+        if state_dirty:
+            save_state(state)
 
     except IGException as e:
         print(f"⚠️ IG API Monitor Error: {e}")
