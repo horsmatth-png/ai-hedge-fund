@@ -471,10 +471,9 @@ def _call_ai(prompt: str, max_tokens: int = 400) -> str:
     # Fallback to Gemini if Groq is unavailable or fails
     if GEMINI_API_KEY:
         try:
-            from google import genai as google_genai
-            client = google_genai.Client(api_key=GEMINI_API_KEY)
-            resp = client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
-            text = (getattr(resp, "text", None) or "").strip()
+            import google.generativeai as genai
+            genai.configure(api_key=GEMINI_API_KEY)
+            text = (genai.GenerativeModel(GEMINI_MODEL).generate_content(prompt).text or "").strip()
             if text:
                 return text
         except Exception as e:
@@ -627,6 +626,7 @@ def build_position_plan(pick: dict, region: str, fx_to_gbp: float, remaining_bud
     if qty <= 0 or (qty * price_gbp) < 20.0:
         return None
 
+    # Note: T212 UK equity stopPrice is quoted in GBP (£), whereas Yahoo LSE prices are in pence (GBp)
     entry_native = round(pick["price"], 2)
     stop_native = round(max(0.01, entry_native - stop_dist_native), 2)
     target_native = round(entry_native + 2.5 * stop_dist_native, 2)
@@ -897,6 +897,14 @@ def execute_swing_3pm_uk_us():
 
     current_exposure_gbp = sum(float(p.get("position_gbp") or 0.0) for p in open_trades.values())
     remaining_budget_gbp = max(0.0, MAX_OPEN_EXPOSURE_GBP - current_exposure_gbp)
+    if t212.is_configured() and not t212.dry_run:
+        try:
+            acct_sum = t212.get_account_summary()
+            avail_cash = float(((acct_sum.get("cash") or {}).get("availableToTrade")) or 0.0)
+            if avail_cash >= 0:
+                remaining_budget_gbp = min(remaining_budget_gbp, avail_cash)
+        except Exception:
+            pass
     if remaining_budget_gbp < 20.0:
         print(f"🛑 £{ACCOUNT_SIZE_GBP:.0f} swing budget utilized (£{current_exposure_gbp:.2f} open).")
         save_swing_state(state)
@@ -943,17 +951,43 @@ def execute_swing_3pm_uk_us():
             print(f"⚠️ Could not resolve T212 ticker for {ticker}, skipping.")
             continue
 
+        # T212 UK equities expect stopPrice in GBP (£), while US equities expect USD ($)
+        broker_stop_price = plan["stop_gbp"] if region == "UK" else plan["stop"]
+
         buy_res = None
+        filled_qty = plan["quantity"]
         try:
             buy_res = t212.place_long_market_buy(t212_ticker, plan["quantity"])
             if not t212.dry_run and t212.is_configured():
-                time.sleep(2.5)
-            stop_res = t212.place_protective_stop_sell(t212_ticker, plan["quantity"], plan["stop"])
+                # Poll portfolio up to ~12s for market order fill so stop order sees owned shares
+                owned_qty = 0.0
+                for _ in range(4):
+                    time.sleep(3.0)
+                    try:
+                        positions = t212.get_open_positions()
+                        for p in positions:
+                            if str(p.get("ticker")) == t212_ticker:
+                                owned_qty = float(p.get("quantity") or 0.0)
+                                break
+                    except Exception:
+                        pass
+                    if owned_qty > 0:
+                        break
+                if owned_qty <= 0:
+                    raise RuntimeError(
+                        f"Buy order {buy_res.get('id')} on {t212_ticker} not yet filled/settled in portfolio (market closed or pending)"
+                    )
+                filled_qty = round(min(plan["quantity"], owned_qty), 4)
+            stop_res = t212.place_protective_stop_sell(t212_ticker, filled_qty, broker_stop_price)
         except Exception as e:
             print(f"⚠️ Order error on {ticker} ({t212_ticker}): {e!r}")
-            if buy_res and buy_res.get("id"):
+            # Only attempt emergency market sell if we actually hold shares in the portfolio
+            if not t212.dry_run and t212.is_configured():
                 try:
-                    t212.place_market_sell(t212_ticker, plan["quantity"])
+                    positions = t212.get_open_positions()
+                    held = next((float(p.get("quantity") or 0.0) for p in positions if str(p.get("ticker")) == t212_ticker), 0.0)
+                    if held > 0:
+                        t212.place_market_sell(t212_ticker, held)
                 except Exception as close_err:
                     print(f"🚨 Emergency close failed on {t212_ticker}: {close_err!r}")
             continue
@@ -965,7 +999,7 @@ def execute_swing_3pm_uk_us():
             "horizon": pick.get("ai_horizon", "SHORT_AND_LONG"),
             "ai_reason": pick.get("ai_reason", ""),
             "side": "BUY",
-            "quantity": plan["quantity"],
+            "quantity": filled_qty,
             "entry": plan["entry"],
             "stop": plan["stop"],
             "target": plan["target"],
@@ -1056,7 +1090,7 @@ def monitor_swing_trades():
 
         if REQUIRE_STOP_LOSS and live_order_ids is not None and stop_order_id and str(stop_order_id) not in live_order_ids:
             try:
-                re_stop = t212.place_protective_stop_sell(t212_ticker, qty, stop)
+                re_stop = t212.place_protective_stop_sell(t212_ticker, qty, broker_stop_price)
                 pos["stop_order_id"] = re_stop.get("id")
                 stop_order_id = pos["stop_order_id"]
                 dirty = True
@@ -1072,13 +1106,14 @@ def monitor_swing_trades():
                 continue
 
         df = latest.get(ticker)
-        curr_price = float(df["Close"].iloc[-1]) if (df is not None and not df.empty) else entry
+        curr_price = _to_float(df["Close"].dropna()) if (df is not None and not df.empty and not df["Close"].dropna().empty) else entry
 
         unit_to_gbp = cfg["scale"] * (fx_to_gbp if region == "US" else 1.0)
         entry_gbp = float(pos.get("entry_gbp") or entry * unit_to_gbp)
         curr_gbp = curr_price * unit_to_gbp
         stop_gbp = float(pos.get("stop_gbp") or stop * unit_to_gbp)
         target_gbp = float(pos.get("target_gbp") or target * unit_to_gbp)
+        broker_stop_price = stop_gbp if region == "UK" else stop
 
         heads = fetch_news(ticker, region)
         exit_reason = None
