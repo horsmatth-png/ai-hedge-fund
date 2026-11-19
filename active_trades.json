@@ -1,1 +1,17 @@
-
+{
+    "date": "2026-11-19",
+    "counts": {
+        "UK": 1,
+        "US": 0
+    },
+    "active_orders": {
+        "KA.D.VOD.DAILY.IP": {
+            "dealReference": "RBAVRSA58QCTYSB",
+            "ticker": "VOD.L",
+            "region": "UK",
+            "side": "SHORT",
+            "timestamp": "2026-11-19T10:47:53.972046"
+        }
+    },
+    "risk_alerts": {}
+}
