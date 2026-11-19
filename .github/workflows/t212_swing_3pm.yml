@@ -1,0 +1,67 @@
+name: T212 £1k 3PM UK+US Swing & Day AI
+
+on:
+  schedule:
+    - cron: '0 15 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  swing-3pm-entry:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: t212-swing-3pm-1k
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas numpy yfinance python-dotenv groq google-generativeai lxml html5lib beautifulsoup4
+
+      - name: Run 3PM UK+US Swing & Day Cherry-Picker
+        env:
+          RUN_MODE: execute_3pm
+          ACCOUNT_SIZE_GBP: '1000'
+          RISK_PER_TRADE_PCT: '1.0'
+          MAX_POSITION_PCT: '30.0'
+          MAX_DAILY_TRADES: '3'
+          MAX_OPEN_EXPOSURE_GBP: '950'
+          T212_BASE_URL: 'https://demo.trading212.com/api/v0'
+          T212_DRY_RUN: 'false'
+          TRADING_212_API: ${{ secrets.TRADING_212_API }}
+          TRADING_212_SECRET_API: ${{ secrets.TRADING_212_SECRET_API }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python t212_swing_3pm_bot.py
+
+      - name: Sync Remote State Before Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add swing_trades.json t212_instruments_cache.json || true
+          git stash --include-untracked || true
+          git pull --rebase origin main
+          git stash pop || true
+
+      - name: Commit and push swing state update
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update swing_trades.json after 3pm UK+US scan"
+          file_pattern: |
+            swing_trades.json
+            t212_instruments_cache.json
