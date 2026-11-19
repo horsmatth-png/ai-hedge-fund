@@ -30,6 +30,7 @@ IG_ACC_NUMBER = os.getenv("IG_ACC_NUMBER")
 # State & Limits
 STATE_FILE = "active_trades.json"
 MAX_TRADES_PER_REGION = 3
+REQUIRE_STOP_LOSS = True
 
 # AI & Scanner Config
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
@@ -523,25 +524,25 @@ def _place_ig_working_order(
     direction: str,
     entry_pts: float,
     stake: float,
-    sl_pts: float | None,
-    tp_pts: float | None,
+    sl_pts: float,
+    tp_pts: float,
 ):
-    kwargs = {
-        "currency_code": "GBP",
-        "direction": direction,
-        "epic": epic,
-        "expiry": "DFB",
-        "level": entry_pts,
-        "order_type": "LIMIT",
-        "size": round(stake, 2),
-        "time_in_force": "GOOD_TILL_CANCELLED",
-        "guaranteed_stop": False,
-    }
-    if sl_pts is not None:
-        kwargs["stop_level"] = sl_pts
-    if tp_pts is not None:
-        kwargs["limit_level"] = tp_pts
-    return ig_service.create_working_order(**kwargs)
+    if REQUIRE_STOP_LOSS and (sl_pts is None or tp_pts is None):
+        raise ValueError(f"Refusing to place order without stop/limit levels on {epic}")
+
+    return ig_service.create_working_order(
+        currency_code="GBP",
+        direction=direction,
+        epic=epic,
+        expiry="DFB",
+        level=entry_pts,
+        order_type="LIMIT",
+        size=round(stake, 2),
+        time_in_force="GOOD_TILL_CANCELLED",
+        guaranteed_stop=False,
+        stop_level=sl_pts,
+        limit_level=tp_pts,
+    )
 
 
 def execute_daily_trades():
@@ -652,16 +653,15 @@ def execute_daily_trades():
         stake = plan["stake"]
 
         if region == "UK":
-            risk_pts = max(plan["risk_pts"], min_stop_dist * 2.0, entry_pts * 0.015)
+            # UK-only wider buffer & strict stop/limit ordering; never strip stops
+            risk_pts = max(plan["risk_pts"], min_stop_dist * 2.5, entry_pts * 0.02, 10.0)
             sl_pts = round(entry_pts - sign * risk_pts, 1)
             tp_pts = round(entry_pts + sign * 2.0 * risk_pts, 1)
 
-            if direction == "BUY" and not (sl_pts < entry_pts < tp_pts):
-                sl_pts = round(entry_pts - risk_pts, 1)
-                tp_pts = round(entry_pts + 2.0 * risk_pts, 1)
-            elif direction == "SELL" and not (tp_pts < entry_pts < sl_pts):
-                sl_pts = round(entry_pts + risk_pts, 1)
-                tp_pts = round(entry_pts - 2.0 * risk_pts, 1)
+            valid_levels = (sl_pts < entry_pts < tp_pts) if direction == "BUY" else (tp_pts < entry_pts < sl_pts)
+            if not valid_levels:
+                print(f"⛔ Invalid UK SL/TP order for {ticker} ({epic}): entry={entry_pts}, sl={sl_pts}, tp={tp_pts}; skipping.")
+                continue
         else:
             risk_pts = max(plan["risk_pts"], min_stop_dist * 1.1)
             sl_pts = round(entry_pts - sign * risk_pts, 1)
@@ -684,26 +684,9 @@ def execute_daily_trades():
             deal_ref = response.get("dealReference") if isinstance(response, dict) else getattr(response, "dealReference", None)
 
             if region == "UK":
-                deal_status, conf_data = fetch_deal_confirmation(ig_service, deal_ref, ticker)
-                reason = str((conf_data or {}).get("reason") or "")
-
-                if deal_status == "REJECTED" and "ATTACHED_ORDER_LEVEL_ERROR" in reason:
-                    print(f"↩️ Retrying UK spread bet for {ticker} ({epic}) without attached SL/TP after ATTACHED_ORDER_LEVEL_ERROR...")
-                    response = _place_ig_working_order(
-                        ig_service=ig_service,
-                        epic=epic,
-                        direction=direction,
-                        entry_pts=entry_pts,
-                        stake=stake,
-                        sl_pts=None,
-                        tp_pts=None,
-                    )
-                    deal_ref = response.get("dealReference") if isinstance(response, dict) else getattr(response, "dealReference", None)
-                    deal_status, _ = fetch_deal_confirmation(ig_service, deal_ref, ticker)
-                    sl_pts, tp_pts = None, None
-
+                deal_status, _ = fetch_deal_confirmation(ig_service, deal_ref, ticker)
                 if deal_status == "REJECTED":
-                    print(f"⛔ UK spread bet rejected by IG for {ticker} ({epic}); not counting toward daily limit.")
+                    print(f"⛔ UK spread bet rejected by IG for {ticker} ({epic}); skipping without stripping stop loss.")
                     continue
             else:
                 fetch_deal_confirmation(ig_service, deal_ref, ticker)
@@ -713,13 +696,12 @@ def execute_daily_trades():
                 "ticker": ticker,
                 "region": region,
                 "side": pick["side"],
+                "stopLevel": sl_pts,
+                "limitLevel": tp_pts,
                 "timestamp": datetime.utcnow().isoformat(),
             }
             state["counts"][region] += 1
             print(f"🚀 Placed IG {region} Spread Bet for {ticker} ({epic}) | Ref: {deal_ref}")
-
-            sl_display = f"{sl_pts:.1f}" if sl_pts is not None else "None"
-            tp_display = f"{tp_pts:.1f}" if tp_pts is not None else "None"
 
             if DISCORD_WEBHOOK_URL:
                 requests.post(
@@ -728,7 +710,7 @@ def execute_daily_trades():
                         "username": cfg["bot"],
                         "content": (
                             f"🎯 **IG {region} Spread Bet Placed**: `{ticker}` ({pick['side']}) | Score: `{pick['score']}/100`\n"
-                            f"• **Stake:** `£{stake:.2f}/pt` | **Entry:** `{entry_pts:.1f} pts` | **SL:** `{sl_display}` | **TP:** `{tp_display}`\n"
+                            f"• **Stake:** `£{stake:.2f}/pt` | **Entry:** `{entry_pts:.1f} pts` | **SL:** `{sl_pts:.1f}` | **TP:** `{tp_pts:.1f}`\n"
                             f"• **AI Read:** {commentary}"
                         ),
                     },
@@ -806,7 +788,7 @@ def monitor_trades():
                     ig_service.delete_working_order(deal_id)
                     print(f"🗑️ Cancelled stale working order {deal_id} ({epic}) after {age_hours:.1f}h")
 
-        # 2. Audit ALL open positions with news + AI risk check
+        # 2. Audit ALL open positions with stop guard + news + AI risk check
         for pos in positions:
             p_data = pos.get("position", {}) if isinstance(pos.get("position"), dict) else pos
             m_data = pos.get("market", {}) if isinstance(pos.get("market"), dict) else pos
@@ -834,6 +816,46 @@ def monitor_trades():
             if not ticker:
                 print(f"⚠️ Could not resolve ticker for position {deal_id} ({epic}), skipping...")
                 continue
+
+            # Guard against any open position missing a stop loss
+            if REQUIRE_STOP_LOSS and (stop_lvl is None or float(stop_lvl or 0) <= 0):
+                sign = 1 if direction == "BUY" else -1
+                fallback_dist = max(curr_lvl * 0.02, 10.0)
+                computed_sl = round(curr_lvl - sign * fallback_dist, 1)
+                stop_attached = False
+                try:
+                    ig_service.update_open_position(
+                        limit_level=limit_lvl,
+                        stop_level=computed_sl,
+                        deal_id=deal_id,
+                    )
+                    stop_lvl = computed_sl
+                    stop_attached = True
+                    print(f"🛡️ Attached missing stop loss ({computed_sl}) to open position {ticker} ({deal_id}).")
+                except Exception as sl_err:
+                    print(f"⚠️ Could not attach stop loss to {ticker} ({deal_id}): {sl_err!r}")
+
+                if not stop_attached:
+                    close_dir = "SELL" if direction == "BUY" else "BUY"
+                    ig_service.close_open_position(
+                        deal_id=deal_id,
+                        direction=close_dir,
+                        epic=None,
+                        expiry=None,
+                        order_type="MARKET",
+                        size=size,
+                    )
+                    print(f"🚨 Closed unprotected position {ticker} ({deal_id}) because no stop loss could be set.")
+                    if DISCORD_WEBHOOK_URL:
+                        requests.post(
+                            DISCORD_WEBHOOK_URL,
+                            json={
+                                "username": "IG Risk Guard",
+                                "content": f"🚨 **PROTECTIVE EXIT**: Closed `{ticker}` ({direction}) because it had no active stop loss and attaching one failed.",
+                            },
+                            timeout=10,
+                        )
+                    continue
 
             heads = fetch_news(ticker, region)
 
