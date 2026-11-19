@@ -2,7 +2,7 @@
     "date": "2026-11-19",
     "counts": {
         "UK": 3,
-        "US": 0
+        "US": 3
     },
     "active_orders": {
         "KA.D.VOD.DAILY.IP": {
@@ -25,6 +25,33 @@
             "region": "UK",
             "side": "LONG",
             "timestamp": "2026-11-19T10:54:25.990124"
+        },
+        "SA.D.AMD.DAILY.IP": {
+            "dealReference": "P7H63SX4MX8TYSB",
+            "ticker": "AMD",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 49428.9,
+            "limitLevel": 43409.4,
+            "timestamp": "2026-11-19T15:54:09.451277"
+        },
+        "SH.D.VVVUS.DAILY.IP": {
+            "dealReference": "YBKEAENTVTCTYSB",
+            "ticker": "VVV",
+            "region": "US",
+            "side": "LONG",
+            "stopLevel": 3683.4,
+            "limitLevel": 3854.1,
+            "timestamp": "2026-11-19T15:54:11.131674"
+        },
+        "SB.D.CTVAUS.DAILY.IP": {
+            "dealReference": "KZDBP8X49B4TYSB",
+            "ticker": "CTVA",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 842.2,
+            "limitLevel": 761.5,
+            "timestamp": "2026-11-19T15:54:12.892917"
         }
     },
     "risk_alerts": {
