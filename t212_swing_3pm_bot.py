@@ -39,6 +39,11 @@ MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "3"))               # Up to
 MAX_OPEN_EXPOSURE_GBP = float(os.getenv("MAX_OPEN_EXPOSURE_GBP", "950.0"))
 REQUIRE_STOP_LOSS = True
 
+# Foolproof IG Stake Floors (if IG automation shares this config module)
+IG_MIN_STAKE_UK = float(os.getenv("IG_MIN_STAKE_UK", "1.0"))
+IG_MIN_STAKE_US = float(os.getenv("IG_MIN_STAKE_US", "0.24"))
+
+
 # AI & Scanner Config
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -777,25 +782,38 @@ class Trading212Client:
 
     def place_protective_stop_sell(self, t212_ticker: str, quantity: float, stop_price: float) -> dict:
         """
-        Option A: Places a broker-side SELL STOP order on Trading 212 immediately after buy fill.
+        Places a broker-side SELL STOP order on Trading 212 immediately after buy fill,
+        with retry & verification so no trade is left unprotected.
         """
-        if stop_price is None or stop_price <= 0:
+        if stop_price is None or float(stop_price) <= 0:
             raise ValueError(f"Refusing to place trade without valid stop_price on {t212_ticker}")
         qty = self._clean_qty(quantity, 4)
+        if qty <= 0:
+            raise ValueError(f"Refusing to place stop order with zero quantity on {t212_ticker}")
+        rounded_stop = round(float(stop_price), 2)
         if self.dry_run or not self.is_configured():
             fake_id = f"SIM-STOP-{int(datetime.utcnow().timestamp())}"
-            print(f"[DRY_RUN] T212 SELL STOP {-qty} {t212_ticker} @ {stop_price} -> {fake_id}")
+            print(f"[DRY_RUN] T212 SELL STOP {-qty} {t212_ticker} @ {rounded_stop} -> {fake_id}")
             return {"id": fake_id, "status": "SIMULATED"}
-        return self._request(
-            "POST",
-            "/equity/orders/stop",
-            {
-                "ticker": t212_ticker,
-                "quantity": -qty,
-                "stopPrice": round(float(stop_price), 2),
-                "timeValidity": "GOOD_TILL_CANCEL",
-            },
-        )
+
+        last_err = None
+        for attempt in range(3):
+            try:
+                res = self._request(
+                    "POST",
+                    "/equity/orders/stop",
+                    {
+                        "ticker": t212_ticker,
+                        "quantity": -qty,
+                        "stopPrice": rounded_stop,
+                        "timeValidity": "GOOD_TILL_CANCEL",
+                    },
+                )
+                return res
+            except Exception as err:
+                last_err = err
+                time.sleep(1.5 * (attempt + 1))
+        raise RuntimeError(f"Failed to place protective SELL STOP on {t212_ticker} @ {rounded_stop}: {last_err}")
 
     def place_market_sell(self, t212_ticker: str, quantity: float) -> dict:
         qty = self._clean_qty(quantity, 4)
@@ -979,6 +997,21 @@ def execute_swing_3pm_uk_us():
                     )
                 filled_qty = round(min(plan["quantity"], owned_qty), 4)
             stop_res = t212.place_protective_stop_sell(t212_ticker, filled_qty, broker_stop_price)
+            if not stop_res or not stop_res.get("id"):
+                raise RuntimeError(f"Stop order response missing ID on {t212_ticker}: {stop_res}")
+            if not t212.dry_run and t212.is_configured():
+                time.sleep(1.5)
+                try:
+                    pending = t212.get_pending_orders()
+                    stop_id_str = str(stop_res.get("id"))
+                    has_stop = any(
+                        str(o.get("id")) == stop_id_str or (str(o.get("ticker")) == t212_ticker and float(o.get("quantity") or 0) < 0)
+                        for o in pending
+                    )
+                    if not has_stop:
+                        print(f"⚠️ Stop {stop_id_str} not yet visible in /equity/orders for {t212_ticker}; re-checking on surveillance.")
+                except Exception as chk_err:
+                    print(f"⚠️ Pending order check warning on {t212_ticker}: {chk_err!r}")
         except Exception as e:
             print(f"⚠️ Order error on {ticker} ({t212_ticker}): {e!r}")
             # Only attempt emergency market sell if we actually hold shares in the portfolio
@@ -1118,12 +1151,32 @@ def monitor_swing_trades():
         heads = fetch_news(ticker, region)
         exit_reason = None
 
+        pnl_gbp_now = (curr_gbp - entry_gbp) * qty
+        pnl_pct_now = ((curr_gbp - entry_gbp) / entry_gbp * 100.0) if entry_gbp else 0.0
+        target_gbp_val = float(pos.get("target_gbp") or target * unit_to_gbp)
+
+        # Notify when in profit and target price is reached (keeps stop-loss active unless shock news)
+        if curr_gbp >= target_gbp_val and pnl_gbp_now > 0:
+            last_tp_alert = (pos.get("profit_alerts") or {}).get("target_hit")
+            can_tp_alert = True
+            if last_tp_alert:
+                can_tp_alert = ((now_utc - datetime.fromisoformat(last_tp_alert)).total_seconds() / 3600.0) >= 2.0
+            if can_tp_alert:
+                msg = (
+                    f"🎯 **PROFIT TARGET REACHED — CONSIDER SELLING**: `{ticker}` (`{qty}` sh)\n"
+                    f"• **Entry:** `£{entry_gbp:.2f}` -> **Current:** `£{curr_gbp:.2f}` (`{pnl_pct_now:+.2f}%` | **Est Profit:** `£{pnl_gbp_now:+.2f}`)\n"
+                    f"• **Target Price:** `£{target_gbp_val:.2f}` | **Broker Stop Still Active:** `£{stop_gbp:.2f}`"
+                )
+                print(f"🎯 {ticker} hit profit target (£{curr_gbp:.2f} >= £{target_gbp_val:.2f}, P&L £{pnl_gbp_now:+.2f}) — sending sell notification.")
+                post_discord("T212 Profit & Stop Guard", msg)
+                pos.setdefault("profit_alerts", {})["target_hit"] = now_utc.isoformat()
+                dirty = True
+
+        exit_reason = None
         if any(SHOCK_RE.search(h) for h in heads):
             exit_reason = f"Shock news exit: {heads[0]}"
-        elif curr_price >= target:
-            exit_reason = f"Swing target hit ({cfg['ccy']}{curr_price:.2f} >= {cfg['ccy']}{target:.2f})"
-        elif curr_price <= stop:
-            exit_reason = f"Stop breached ({cfg['ccy']}{curr_price:.2f} <= {cfg['ccy']}{stop:.2f})"
+        elif curr_gbp <= stop_gbp:
+            exit_reason = f"Stop breached (£{curr_gbp:.2f} <= £{stop_gbp:.2f})"
 
         if exit_reason:
             try:
