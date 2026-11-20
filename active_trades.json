@@ -1,62 +1,37 @@
 {
-    "date": "2026-11-19",
+    "date": "2026-11-20",
     "counts": {
         "UK": 3,
-        "US": 3
+        "US": 0
     },
     "active_orders": {
-        "KA.D.VOD.DAILY.IP": {
-            "dealReference": "RBAVRSA58QCTYSB",
-            "ticker": "VOD.L",
+        "KA.D.STAN.DAILY.IP": {
+            "dealReference": "7JYPHV7R3PQTYSB",
+            "ticker": "STAN.L",
             "region": "UK",
             "side": "SHORT",
-            "timestamp": "2026-11-19T10:47:53.972046"
+            "stopLevel": 1998.2,
+            "limitLevel": 1880.6,
+            "timestamp": "2026-11-20T09:31:09.364151"
         },
-        "KA.D.AAL.DAILY.IP": {
-            "dealReference": "8PDH6YFQT5YTYSB",
-            "ticker": "AAL.L",
+        "KA.D.ABF.DAILY.IP": {
+            "dealReference": "NTEXYWT7KK4TYSB",
+            "ticker": "ABF.L",
             "region": "UK",
             "side": "LONG",
-            "timestamp": "2026-11-19T10:54:14.457120"
+            "stopLevel": 1988.4,
+            "limitLevel": 2110.2,
+            "timestamp": "2026-11-20T09:31:14.678769"
         },
-        "KA.D.BRBY.DAILY.IP": {
-            "dealReference": "MCMCASV58LTYSB",
-            "ticker": "BRBY.L",
+        "KA.D.PHNXLN.DAILY.IP": {
+            "dealReference": "4HW9GRXYXSYTYSB",
+            "ticker": "SDLF.L",
             "region": "UK",
-            "side": "LONG",
-            "timestamp": "2026-11-19T10:54:25.990124"
-        },
-        "SA.D.AMD.DAILY.IP": {
-            "dealReference": "P7H63SX4MX8TYSB",
-            "ticker": "AMD",
-            "region": "US",
             "side": "SHORT",
-            "stopLevel": 49428.9,
-            "limitLevel": 43409.4,
-            "timestamp": "2026-11-19T15:54:09.451277"
-        },
-        "SH.D.VVVUS.DAILY.IP": {
-            "dealReference": "YBKEAENTVTCTYSB",
-            "ticker": "VVV",
-            "region": "US",
-            "side": "LONG",
-            "stopLevel": 3683.4,
-            "limitLevel": 3854.1,
-            "timestamp": "2026-11-19T15:54:11.131674"
-        },
-        "SB.D.CTVAUS.DAILY.IP": {
-            "dealReference": "KZDBP8X49B4TYSB",
-            "ticker": "CTVA",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 842.2,
-            "limitLevel": 761.5,
-            "timestamp": "2026-11-19T15:54:12.892917"
+            "stopLevel": 896.0,
+            "limitLevel": 843.3,
+            "timestamp": "2026-11-20T09:31:17.370147"
         }
     },
-    "risk_alerts": {
-        "DIAAAAYV6VRAMAW": "2026-11-20T07:42:53.991532",
-        "DIAAAAYV6WNV9BM": "2026-11-20T06:22:12.224348",
-        "DIAAAAYV7VD6FBR": "2026-11-19T19:06:43.782269"
-    }
+    "risk_alerts": {}
 }
