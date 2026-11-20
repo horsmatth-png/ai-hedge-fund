@@ -1,0 +1,32 @@
+name: Daily Sector Money Flow & Rotation
+
+on:
+  schedule:
+    # Runs Monday-Friday at 14:30 UTC (2:30 PM GMT / UK afternoon)
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  sector-flow:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install --upgrade pip
+          pip install yfinance pandas numpy requests python-dotenv groq google-generativeai
+
+      - name: Run Sector Money Flow & Groq AI Rotation Scanner
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
+        run: python sector_flow_rotation_bot.py
