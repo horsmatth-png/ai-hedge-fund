@@ -2,7 +2,7 @@
     "date": "2026-11-23",
     "counts": {
         "UK": 3,
-        "US": 0
+        "US": 3
     },
     "active_orders": {
         "KA.D.BAB.DAILY.IP": {
@@ -31,6 +31,33 @@
             "stopLevel": 515.8,
             "limitLevel": 549.4,
             "timestamp": "2026-11-23T10:00:55.807067"
+        },
+        "UA.D.APPUS.DAILY.IP": {
+            "dealReference": "9FPK3WYSYC8TYSB",
+            "ticker": "APP",
+            "region": "US",
+            "side": "LONG",
+            "stopLevel": 36776.9,
+            "limitLevel": 40366.7,
+            "timestamp": "2026-11-23T15:59:36.722586"
+        },
+        "UD.D.VICRUS.DAILY.IP": {
+            "dealReference": "2GAKSW8G23UTYSB",
+            "ticker": "VICR",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 15072.1,
+            "limitLevel": 13117.0,
+            "timestamp": "2026-11-23T15:59:38.406092"
+        },
+        "UD.D.SMCIUS.DAILY.IP": {
+            "dealReference": "DQQHYU7APWQTYSB",
+            "ticker": "SMCI",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 2608.7,
+            "limitLevel": 2309.6,
+            "timestamp": "2026-11-23T15:59:42.808429"
         }
     },
     "risk_alerts": {
