@@ -1,68 +1,37 @@
 {
-    "date": "2026-11-20",
+    "date": "2026-11-23",
     "counts": {
         "UK": 3,
-        "US": 3
+        "US": 0
     },
     "active_orders": {
-        "KA.D.STAN.DAILY.IP": {
-            "dealReference": "7JYPHV7R3PQTYSB",
-            "ticker": "STAN.L",
-            "region": "UK",
-            "side": "SHORT",
-            "stopLevel": 1998.2,
-            "limitLevel": 1880.6,
-            "timestamp": "2026-11-20T09:31:09.364151"
-        },
-        "KA.D.ABF.DAILY.IP": {
-            "dealReference": "NTEXYWT7KK4TYSB",
-            "ticker": "ABF.L",
+        "KA.D.BAB.DAILY.IP": {
+            "dealReference": "UQDND7297JGTYSB",
+            "ticker": "BAB.L",
             "region": "UK",
             "side": "LONG",
-            "stopLevel": 1988.4,
-            "limitLevel": 2110.2,
-            "timestamp": "2026-11-20T09:31:14.678769"
+            "stopLevel": 1004.5,
+            "limitLevel": 1066.0,
+            "timestamp": "2026-11-23T10:00:46.881337"
         },
-        "KA.D.PHNXLN.DAILY.IP": {
-            "dealReference": "4HW9GRXYXSYTYSB",
-            "ticker": "SDLF.L",
+        "KA.D.ANTO.DAILY.IP": {
+            "dealReference": "9SY4RHL9JV4TYSB",
+            "ticker": "ANTO.L",
             "region": "UK",
             "side": "SHORT",
-            "stopLevel": 896.0,
-            "limitLevel": 843.3,
-            "timestamp": "2026-11-20T09:31:17.370147"
+            "stopLevel": 2734.7,
+            "limitLevel": 2542.7,
+            "timestamp": "2026-11-23T10:00:54.414922"
         },
-        "UD.D.SNDKUS.DAILY.IP": {
-            "dealReference": "5536SE9LS54TYSB",
-            "ticker": "SNDK",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 8655.4,
-            "limitLevel": 7108.0,
-            "timestamp": "2026-11-20T15:53:37.608818"
-        },
-        "SE.D.MTZ.DAILY.IP": {
-            "dealReference": "HVLWRBHGPT8TYSB",
-            "ticker": "MTZ",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 15478.7,
-            "limitLevel": 13806.8,
-            "timestamp": "2026-11-20T15:53:39.409371"
-        },
-        "SC.D.FNUS.DAILY.IP": {
-            "dealReference": "W7JAXQ27BWQTYSB",
-            "ticker": "FN",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 30255.2,
-            "limitLevel": 26102.0,
-            "timestamp": "2026-11-20T15:53:41.016585"
+        "KA.D.PCT.DAILY.IP": {
+            "dealReference": "6HDT5RWBV74TYSB",
+            "ticker": "PCT.L",
+            "region": "UK",
+            "side": "LONG",
+            "stopLevel": 515.8,
+            "limitLevel": 549.4,
+            "timestamp": "2026-11-23T10:00:55.807067"
         }
     },
-    "risk_alerts": {
-        "DIAAAAYWC7W9ABX": "2026-11-23T01:40:59.807445",
-        "DIAAAAYWEJ5FKAY": "2026-11-21T03:19:28.287239",
-        "DIAAAAYWEJCTCBV": "2026-11-22T16:02:54.650179"
-    }
+    "risk_alerts": {}
 }
