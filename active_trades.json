@@ -1,67 +1,19 @@
 {
-    "date": "2026-11-23",
+    "date": "2026-11-24",
     "counts": {
-        "UK": 3,
-        "US": 3
+        "UK": 1,
+        "US": 0
     },
     "active_orders": {
-        "KA.D.BAB.DAILY.IP": {
-            "dealReference": "UQDND7297JGTYSB",
-            "ticker": "BAB.L",
-            "region": "UK",
-            "side": "LONG",
-            "stopLevel": 1004.5,
-            "limitLevel": 1066.0,
-            "timestamp": "2026-11-23T10:00:46.881337"
-        },
         "KA.D.ANTO.DAILY.IP": {
-            "dealReference": "9SY4RHL9JV4TYSB",
+            "dealReference": "RK9UX3SZYKLTYSB",
             "ticker": "ANTO.L",
             "region": "UK",
             "side": "SHORT",
-            "stopLevel": 2734.7,
-            "limitLevel": 2542.7,
-            "timestamp": "2026-11-23T10:00:54.414922"
-        },
-        "KA.D.PCT.DAILY.IP": {
-            "dealReference": "6HDT5RWBV74TYSB",
-            "ticker": "PCT.L",
-            "region": "UK",
-            "side": "LONG",
-            "stopLevel": 515.8,
-            "limitLevel": 549.4,
-            "timestamp": "2026-11-23T10:00:55.807067"
-        },
-        "UA.D.APPUS.DAILY.IP": {
-            "dealReference": "9FPK3WYSYC8TYSB",
-            "ticker": "APP",
-            "region": "US",
-            "side": "LONG",
-            "stopLevel": 36776.9,
-            "limitLevel": 40366.7,
-            "timestamp": "2026-11-23T15:59:36.722586"
-        },
-        "UD.D.VICRUS.DAILY.IP": {
-            "dealReference": "2GAKSW8G23UTYSB",
-            "ticker": "VICR",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 15072.1,
-            "limitLevel": 13117.0,
-            "timestamp": "2026-11-23T15:59:38.406092"
-        },
-        "UD.D.SMCIUS.DAILY.IP": {
-            "dealReference": "DQQHYU7APWQTYSB",
-            "ticker": "SMCI",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 2608.7,
-            "limitLevel": 2309.6,
-            "timestamp": "2026-11-23T15:59:42.808429"
+            "stopLevel": 2685.8,
+            "limitLevel": 2493.2,
+            "timestamp": "2026-11-24T09:42:07.893029"
         }
     },
-    "risk_alerts": {
-        "DIAAAAYWC7W9ABX": "2026-11-24T08:48:17.026483",
-        "DIAAAAYWL92GBBU": "2026-11-23T21:07:04.559935"
-    }
+    "risk_alerts": {}
 }
