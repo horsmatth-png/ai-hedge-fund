@@ -1103,15 +1103,19 @@ def monitor_swing_trades():
             if t212_sym in tracked_t212_syms:
                 continue
             # Derive clean display/yfinance ticker & region from T212 ticker suffix
-            if t212_sym.endswith("_UK_EQ") or t212_sym.endswith("l_EQ"):
+            if t212_sym.endswith("_UK_EQ"):
                 region = "UK"
-                base_sym = t212_sym.replace("_UK_EQ", "")
+                base_sym = t212_sym[:-6]
+                yf_sym = f"{base_sym}.L"
+            elif t212_sym.endswith("l_EQ") and not t212_sym.endswith("_US_EQ"):
+                region = "UK"
+                base_sym = t212_sym[:-4]
                 if base_sym.endswith("l"):
                     base_sym = base_sym[:-1]
                 yf_sym = f"{base_sym}.L"
             else:
                 region = "US"
-                base_sym = t212_sym.replace("_US_EQ", "")
+                base_sym = t212_sym[:-6] if t212_sym.endswith("_US_EQ") else t212_sym.split("_")[0]
                 yf_sym = base_sym
 
             stop_dist_gbp = max(avg_price * 0.025, 0.02)
@@ -1173,8 +1177,27 @@ def monitor_swing_trades():
 
         if live_tickers is not None and t212_ticker not in live_tickers:
             print(f"ℹ️ {ticker} ({t212_ticker}) no longer in T212 portfolio; reconciling {SWING_STATE_FILE}.")
-            to_close.append((ticker, "Closed on broker (stop filled)"))
+            df_rec = latest.get(ticker)
+            px_rec = _to_float(df_rec["Close"].dropna()) if (df_rec is not None and not df_rec.empty and not df_rec["Close"].dropna().empty) else entry
+            u_rec = cfg["scale"] * (fx_to_gbp if region == "US" else 1.0)
+            e_gbp_rec = float(pos.get("entry_gbp") or entry * u_rec)
+            c_gbp_rec = px_rec * u_rec
+            t_gbp_rec = float(pos.get("target_gbp") or target * u_rec)
+            if c_gbp_rec >= t_gbp_rec or c_gbp_rec > e_gbp_rec:
+                rec_reason = f"Target profit reached / closed in profit (£{c_gbp_rec:.2f} vs entry £{e_gbp_rec:.2f}, target £{t_gbp_rec:.2f})"
+            else:
+                rec_reason = "Closed on broker (stop filled)"
+            pnl_rec = (c_gbp_rec - e_gbp_rec) * qty
+            to_close.append((ticker, rec_reason))
             dirty = True
+            post_discord(
+                "T212 Swing Risk Guard",
+                (
+                    f"🔒 **Swing Position Closed**: `{ticker}` (`{qty}` sh)\n"
+                    f"• **Reason:** {rec_reason}\n"
+                    f"• **Est P&L:** `£{pnl_rec:+.2f}`"
+                ),
+            )
             continue
 
         if REQUIRE_STOP_LOSS and live_order_ids is not None and stop_order_id and str(stop_order_id) not in live_order_ids:
@@ -1195,7 +1218,12 @@ def monitor_swing_trades():
                 continue
 
         df = latest.get(ticker)
-        curr_price = _to_float(df["Close"].dropna()) if (df is not None and not df.empty and not df["Close"].dropna().empty) else entry
+        raw_px = _to_float(df["Close"].dropna()) if (df is not None and not df.empty and not df["Close"].dropna().empty) else entry
+        # Guard against unit/scale mismatch where raw quote is >20x or <0.05x entry
+        if entry > 0 and (raw_px > entry * 20.0 or raw_px < entry * 0.05):
+            curr_price = entry
+        else:
+            curr_price = raw_px
 
         unit_to_gbp = cfg["scale"] * (fx_to_gbp if region == "US" else 1.0)
         entry_gbp = float(pos.get("entry_gbp") or entry * unit_to_gbp)
