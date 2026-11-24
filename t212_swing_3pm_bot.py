@@ -1118,10 +1118,17 @@ def monitor_swing_trades():
                 base_sym = t212_sym[:-6] if t212_sym.endswith("_US_EQ") else t212_sym.split("_")[0]
                 yf_sym = base_sym
 
-            stop_dist_gbp = max(avg_price * 0.025, 0.02)
-            stop_gbp_init = round(max(0.01, avg_price - stop_dist_gbp), 2)
-            target_gbp_init = round(avg_price + 2.5 * stop_dist_gbp, 2)
-            pos_gbp_init = round(qty_live * avg_price, 2)
+            # T212 averagePrice is already in GBP for UK equities (or native currency for US).
+            # Use a conservative 3.5% stop below averagePrice and 5.0% target above averagePrice
+            # in the instrument's native price units so `curr_price` vs `stop`/`target` are apples-to-apples!
+            stop_dist_native = max(avg_price * 0.035, 0.02)
+            stop_native_init = round(max(0.01, avg_price - stop_dist_native), 2)
+            target_native_init = round(avg_price * 1.05, 2)
+            fx_now = get_fx_to_gbp() if region == "US" else 1.0
+            entry_gbp_init = round(avg_price * fx_now, 2)
+            stop_gbp_init = round(stop_native_init * fx_now, 2)
+            target_gbp_init = round(target_native_init * fx_now, 2)
+            pos_gbp_init = round(qty_live * entry_gbp_init, 2)
 
             open_trades[yf_sym] = {
                 "ticker": yf_sym,
@@ -1132,9 +1139,9 @@ def monitor_swing_trades():
                 "side": "BUY",
                 "quantity": round(qty_live, 4),
                 "entry": round(avg_price, 2),
-                "stop": stop_gbp_init,
-                "target": target_gbp_init,
-                "entry_gbp": round(avg_price, 2),
+                "stop": stop_native_init,
+                "target": target_native_init,
+                "entry_gbp": entry_gbp_init,
                 "stop_gbp": stop_gbp_init,
                 "target_gbp": target_gbp_init,
                 "position_gbp": pos_gbp_init,
@@ -1259,30 +1266,42 @@ def monitor_swing_trades():
         exit_reason = None
         if any(SHOCK_RE.search(h) for h in heads):
             exit_reason = f"Shock news exit: {heads[0]}"
-        elif curr_gbp <= stop_gbp:
+        elif curr_gbp <= stop_gbp and pnl_gbp_now < 0:
             exit_reason = f"Stop breached (£{curr_gbp:.2f} <= £{stop_gbp:.2f})"
 
         if exit_reason:
+            last_close_alert = (pos.get("close_alert_ts") or "")
+            can_close_alert = True
+            if last_close_alert:
+                can_close_alert = ((now_utc - datetime.fromisoformat(last_close_alert)).total_seconds() / 3600.0) >= 2.0
+
+            sell_succeeded = False
             try:
                 if stop_order_id:
                     t212.cancel_order(stop_order_id)
                     time.sleep(1.0)
                 t212.place_market_sell(t212_ticker, qty)
+                sell_succeeded = True
             except Exception as e:
                 print(f"⚠️ Exit execution warning for {ticker}: {e!r}")
 
             pnl_gbp = (curr_gbp - entry_gbp) * qty
             print(f"🔒 Closed {ticker}: {exit_reason} | Est P&L: £{pnl_gbp:+.2f}")
-            to_close.append((ticker, exit_reason))
-            dirty = True
-            post_discord(
-                "T212 Swing Risk Guard",
-                (
-                    f"🔒 **Swing Position Closed**: `{ticker}` (`{qty}` sh)\n"
-                    f"• **Reason:** {exit_reason}\n"
-                    f"• **Est P&L:** `£{pnl_gbp:+.2f}`"
-                ),
-            )
+            if sell_succeeded:
+                to_close.append((ticker, exit_reason))
+                dirty = True
+            if can_close_alert:
+                status_note = "Market sell submitted (pending fill if market closed)" if sell_succeeded else "Sell order pending/retry"
+                post_discord(
+                    "T212 Swing Risk Guard",
+                    (
+                        f"🔒 **Swing Position Closed**: `{ticker}` (`{qty}` sh)\n"
+                        f"• **Reason:** {exit_reason} ({status_note})\n"
+                        f"• **Est P&L:** `£{pnl_gbp:+.2f}`"
+                    ),
+                )
+                pos["close_alert_ts"] = now_utc.isoformat()
+                dirty = True
             continue
 
         at_risk, verdict = ai_position_check(ticker, qty, entry_gbp, curr_gbp, stop_gbp, target_gbp, heads)
