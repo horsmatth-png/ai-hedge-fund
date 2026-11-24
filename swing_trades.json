@@ -2,6 +2,28 @@
     "date": "2026-11-24",
     "mode": "T212_SWING_3PM_UK_US_1K",
     "trades_executed_today": 0,
-    "open_swing_trades": {},
-    "risk_alerts": {}
+    "open_swing_trades": {
+        "CHE": {
+            "ticker": "CHE",
+            "t212_ticker": "CHE_US_EQ",
+            "region": "US",
+            "horizon": "SYNCED_PORTFOLIO",
+            "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
+            "side": "BUY",
+            "quantity": 0.7212,
+            "entry": 547.05,
+            "stop": 527.9,
+            "target": 574.4,
+            "entry_gbp": 417.58,
+            "stop_gbp": 402.96,
+            "target_gbp": 438.46,
+            "position_gbp": 301.16,
+            "buy_order_id": null,
+            "stop_order_id": null,
+            "opened_at": "2026-11-24T14:28:41.623154"
+        }
+    },
+    "risk_alerts": {
+        "CHE": "2026-11-24T14:28:41.623154"
+    }
 }
