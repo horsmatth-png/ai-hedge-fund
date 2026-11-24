@@ -442,7 +442,7 @@ def fetch_news(ticker: str, region: str) -> list:
                 for a in r.json():
                     title = (a.get("headline") or "").strip()
                     related = [x.strip().upper() for x in (a.get("related") or "").split(",") if x.strip()]
-                    about_it = (tk in related and len(related) <= 3) or re.search(rf" {re.escape(tk)} ", title, re.I)
+                    about_it = (tk in related and len(related) <= 3) or re.search(rf"{re.escape(tk)}", title, re.I)
                     if title and about_it and title not in headlines:
                         headlines.append(title)
                     if len(headlines) >= 5:
@@ -1076,12 +1076,9 @@ def monitor_swing_trades():
     risk_alerts = state.setdefault("risk_alerts", {})
     now_utc = datetime.utcnow()
 
-    if not open_trades:
-        print(f"📭 No open swing trades in {SWING_STATE_FILE}.")
-        return
-
     t212 = Trading212Client(T212_API_KEY, T212_SECRET_KEY, T212_BASE_URL, dry_run=T212_DRY_RUN)
 
+    live_pos = []
     live_tickers = None
     live_order_ids = None
     if t212.is_configured() and not t212.dry_run:
@@ -1092,6 +1089,65 @@ def monitor_swing_trades():
             live_order_ids = {str(o.get("id")) for o in live_orders}
         except Exception as e:
             print(f"⚠️ T212 sync warning: {e!r}")
+
+    # Auto-import any open T212 positions not yet recorded in open_swing_trades
+    imported_any = False
+    if live_pos:
+        tracked_t212_syms = {str(v.get("t212_ticker") or k) for k, v in open_trades.items()}
+        for p in live_pos:
+            t212_sym = str(p.get("ticker") or "")
+            qty_live = float(p.get("quantity") or 0.0)
+            avg_price = float(p.get("averagePrice") or 0.0)
+            if not t212_sym or qty_live <= 0 or avg_price <= 0:
+                continue
+            if t212_sym in tracked_t212_syms:
+                continue
+            # Derive clean display/yfinance ticker & region from T212 ticker suffix
+            if t212_sym.endswith("_UK_EQ") or t212_sym.endswith("l_EQ"):
+                region = "UK"
+                base_sym = t212_sym.replace("_UK_EQ", "")
+                if base_sym.endswith("l"):
+                    base_sym = base_sym[:-1]
+                yf_sym = f"{base_sym}.L"
+            else:
+                region = "US"
+                base_sym = t212_sym.replace("_US_EQ", "")
+                yf_sym = base_sym
+
+            stop_dist_gbp = max(avg_price * 0.025, 0.02)
+            stop_gbp_init = round(max(0.01, avg_price - stop_dist_gbp), 2)
+            target_gbp_init = round(avg_price + 2.5 * stop_dist_gbp, 2)
+            pos_gbp_init = round(qty_live * avg_price, 2)
+
+            open_trades[yf_sym] = {
+                "ticker": yf_sym,
+                "t212_ticker": t212_sym,
+                "region": region,
+                "horizon": "SYNCED_PORTFOLIO",
+                "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
+                "side": "BUY",
+                "quantity": round(qty_live, 4),
+                "entry": round(avg_price, 2),
+                "stop": stop_gbp_init,
+                "target": target_gbp_init,
+                "entry_gbp": round(avg_price, 2),
+                "stop_gbp": stop_gbp_init,
+                "target_gbp": target_gbp_init,
+                "position_gbp": pos_gbp_init,
+                "buy_order_id": None,
+                "stop_order_id": None,
+                "opened_at": now_utc.isoformat(),
+            }
+            imported_any = True
+            print(f"📥 Imported T212 position {yf_sym} ({t212_sym}): {qty_live} sh @ £{avg_price:.2f} | Target £{target_gbp_init:.2f} | Stop £{stop_gbp_init:.2f}")
+
+    if imported_any:
+        state["open_swing_trades"] = open_trades
+        save_swing_state(state)
+
+    if not open_trades:
+        print(f"📭 No open swing trades in {SWING_STATE_FILE}.")
+        return
 
     tickers = list(open_trades.keys())
     latest = batch_download(tickers, chunk_size=20, period="5d", interval="1d")
