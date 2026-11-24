@@ -1,7 +1,7 @@
 {
     "date": "2026-11-24",
     "mode": "T212_SWING_3PM_UK_US_1K",
-    "trades_executed_today": 0,
+    "trades_executed_today": 1,
     "open_swing_trades": {
         "CR1": {
             "ticker": "CR1",
@@ -21,6 +21,25 @@
             "buy_order_id": null,
             "stop_order_id": null,
             "opened_at": "2026-11-24T15:35:25.010511"
+        },
+        "AZN.L": {
+            "ticker": "AZN.L",
+            "t212_ticker": "AZNl_EQ",
+            "region": "UK",
+            "horizon": "SHORT_AND_LONG",
+            "ai_reason": "Ranked by fundamental + VWAP/EMA pullback score and clean news.",
+            "side": "BUY",
+            "quantity": 2.1617,
+            "entry": 13878.0,
+            "stop": 13507.46,
+            "target": 14804.34,
+            "entry_gbp": 138.78,
+            "stop_gbp": 135.07,
+            "target_gbp": 148.04,
+            "position_gbp": 300.0,
+            "buy_order_id": 58550027923,
+            "stop_order_id": 58550027972,
+            "opened_at": "2026-11-24T16:00:46.778724"
         }
     },
     "risk_alerts": {
