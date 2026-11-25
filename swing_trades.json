@@ -1,7 +1,7 @@
 {
-    "date": "2026-11-24",
+    "date": "2026-11-25",
     "mode": "T212_SWING_3PM_UK_US_1K",
-    "trades_executed_today": 1,
+    "trades_executed_today": 0,
     "open_swing_trades": {
         "CR1": {
             "ticker": "CR1",
