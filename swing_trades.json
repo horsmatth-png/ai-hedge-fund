@@ -40,6 +40,25 @@
             "buy_order_id": 58550027923,
             "stop_order_id": 58550027972,
             "opened_at": "2026-11-24T16:00:46.778724"
+        },
+        "KRYS": {
+            "ticker": "KRYS",
+            "t212_ticker": "KRYS_US_EQ",
+            "region": "US",
+            "horizon": "SYNCED_PORTFOLIO",
+            "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
+            "side": "BUY",
+            "quantity": 0.9832,
+            "entry": 334.4,
+            "stop": 322.69,
+            "target": 351.12,
+            "entry_gbp": 255.25,
+            "stop_gbp": 246.32,
+            "target_gbp": 268.02,
+            "position_gbp": 250.96,
+            "buy_order_id": null,
+            "stop_order_id": null,
+            "opened_at": "2026-11-25T03:09:21.756425"
         }
     },
     "risk_alerts": {
