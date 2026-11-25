@@ -2,7 +2,7 @@
     "date": "2026-11-25",
     "counts": {
         "UK": 2,
-        "US": 0
+        "US": 3
     },
     "active_orders": {
         "KA.D.BRBY.DAILY.IP": {
@@ -22,6 +22,33 @@
             "stopLevel": 530.2,
             "limitLevel": 492.4,
             "timestamp": "2026-11-25T09:45:35.219722"
+        },
+        "SC.D.GEVUS.DAILY.IP": {
+            "dealReference": "8DXRMKNDAAYTYSB",
+            "ticker": "GEV",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 70381.9,
+            "limitLevel": 63363.7,
+            "timestamp": "2026-11-25T15:59:39.225979"
+        },
+        "UB.D.LRCX.DAILY.IP": {
+            "dealReference": "ZVWAR6VUZTQTYSB",
+            "ticker": "LRCX",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 18178.5,
+            "limitLevel": 15839.4,
+            "timestamp": "2026-11-25T15:59:41.268577"
+        },
+        "UC.D.MRNAUS.DAILY.IP": {
+            "dealReference": "YQMELZNYMQ4TYSB",
+            "ticker": "MRNA",
+            "region": "US",
+            "side": "SHORT",
+            "stopLevel": 22053.3,
+            "limitLevel": 19872.3,
+            "timestamp": "2026-11-25T15:59:43.660177"
         }
     },
     "risk_alerts": {}
