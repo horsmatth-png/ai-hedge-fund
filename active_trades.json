@@ -1,49 +1,28 @@
 {
-    "date": "2026-11-24",
+    "date": "2026-11-25",
     "counts": {
-        "UK": 1,
-        "US": 3
+        "UK": 2,
+        "US": 0
     },
     "active_orders": {
-        "KA.D.ANTO.DAILY.IP": {
-            "dealReference": "RK9UX3SZYKLTYSB",
-            "ticker": "ANTO.L",
+        "KA.D.BRBY.DAILY.IP": {
+            "dealReference": "V4CCJVCC6W4TYSB",
+            "ticker": "BRBY.L",
+            "region": "UK",
+            "side": "LONG",
+            "stopLevel": 1173.6,
+            "limitLevel": 1245.5,
+            "timestamp": "2026-11-25T09:45:28.169687"
+        },
+        "KA.D.PCT.DAILY.IP": {
+            "dealReference": "S6N775NJGUQTYSB",
+            "ticker": "PCT.L",
             "region": "UK",
             "side": "SHORT",
-            "stopLevel": 2685.8,
-            "limitLevel": 2493.2,
-            "timestamp": "2026-11-24T09:42:07.893029"
-        },
-        "UA.D.ALGMUS.DAILY.IP": {
-            "dealReference": "4R2KBWNX9KQTYSB",
-            "ticker": "ALGM",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 2804.6,
-            "limitLevel": 2485.4,
-            "timestamp": "2026-11-24T16:01:06.000541"
-        },
-        "UD.D.VICRUS.DAILY.IP": {
-            "dealReference": "B8U6C8HP7FLTYSB",
-            "ticker": "VICR",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 13060.0,
-            "limitLevel": 10970.2,
-            "timestamp": "2026-11-24T16:01:07.772046"
-        },
-        "SB.D.DELLUS.DAILY.IP": {
-            "dealReference": "E8VJGDU7L9YTYSB",
-            "ticker": "DELL",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 31018.6,
-            "limitLevel": 26207.5,
-            "timestamp": "2026-11-24T16:01:09.246621"
+            "stopLevel": 530.2,
+            "limitLevel": 492.4,
+            "timestamp": "2026-11-25T09:45:35.219722"
         }
     },
-    "risk_alerts": {
-        "DIAAAAYWC7W9ABX": "2026-11-24T21:08:06.057585",
-        "DIAAAAYXDCE79A9": "2026-11-24T21:59:50.697611"
-    }
+    "risk_alerts": {}
 }
