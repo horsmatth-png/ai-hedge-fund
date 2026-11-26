@@ -40,7 +40,26 @@
             "buy_order_id": null,
             "stop_order_id": null,
             "opened_at": "2026-11-26T14:15:05.996325",
-            "close_alert_ts": "2026-11-26T14:15:05.996325"
+            "close_alert_ts": "2026-11-26T16:33:41.674247"
+        },
+        "HSX.L": {
+            "ticker": "HSX.L",
+            "t212_ticker": "HSXl_EQ",
+            "region": "UK",
+            "horizon": "SYNCED_PORTFOLIO",
+            "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
+            "side": "BUY",
+            "quantity": 15.24,
+            "entry": 19.74,
+            "stop": 19.05,
+            "target": 20.73,
+            "entry_gbp": 19.74,
+            "stop_gbp": 19.05,
+            "target_gbp": 20.73,
+            "position_gbp": 300.84,
+            "buy_order_id": null,
+            "stop_order_id": null,
+            "opened_at": "2026-11-26T16:33:41.674247"
         }
     },
     "risk_alerts": {
