@@ -1,54 +1,36 @@
 {
-    "date": "2026-11-25",
+    "date": "2026-11-26",
     "counts": {
-        "UK": 2,
-        "US": 3
+        "UK": 3,
+        "US": 0
     },
     "active_orders": {
         "KA.D.BRBY.DAILY.IP": {
-            "dealReference": "V4CCJVCC6W4TYSB",
+            "dealReference": "CZ73UB4UYDGTYSB",
             "ticker": "BRBY.L",
             "region": "UK",
             "side": "LONG",
-            "stopLevel": 1173.6,
-            "limitLevel": 1245.5,
-            "timestamp": "2026-11-25T09:45:28.169687"
+            "stopLevel": 1174.3,
+            "limitLevel": 1246.2,
+            "timestamp": "2026-11-26T09:42:28.855330"
         },
-        "KA.D.PCT.DAILY.IP": {
-            "dealReference": "S6N775NJGUQTYSB",
-            "ticker": "PCT.L",
+        "KA.D.ICP.DAILY.IP": {
+            "dealReference": "GQ4UZGNTVTLTYSB",
+            "ticker": "ICG.L",
             "region": "UK",
-            "side": "SHORT",
-            "stopLevel": 530.2,
-            "limitLevel": 492.4,
-            "timestamp": "2026-11-25T09:45:35.219722"
+            "side": "LONG",
+            "stopLevel": 1763.2,
+            "limitLevel": 1871.2,
+            "timestamp": "2026-11-26T09:42:33.890685"
         },
-        "SC.D.GEVUS.DAILY.IP": {
-            "dealReference": "8DXRMKNDAAYTYSB",
-            "ticker": "GEV",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 70381.9,
-            "limitLevel": 63363.7,
-            "timestamp": "2026-11-25T15:59:39.225979"
-        },
-        "UB.D.LRCX.DAILY.IP": {
-            "dealReference": "ZVWAR6VUZTQTYSB",
-            "ticker": "LRCX",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 18178.5,
-            "limitLevel": 15839.4,
-            "timestamp": "2026-11-25T15:59:41.268577"
-        },
-        "UC.D.MRNAUS.DAILY.IP": {
-            "dealReference": "YQMELZNYMQ4TYSB",
-            "ticker": "MRNA",
-            "region": "US",
-            "side": "SHORT",
-            "stopLevel": 22053.3,
-            "limitLevel": 19872.3,
-            "timestamp": "2026-11-25T15:59:43.660177"
+        "KA.D.REL.DAILY.IP": {
+            "dealReference": "9GZHVKPG8EUTYSB",
+            "ticker": "REL.L",
+            "region": "UK",
+            "side": "LONG",
+            "stopLevel": 3031.0,
+            "limitLevel": 3216.6,
+            "timestamp": "2026-11-26T09:42:36.892953"
         }
     },
     "risk_alerts": {}
