@@ -30,6 +30,43 @@ T212_DRY_RUN = os.getenv("T212_DRY_RUN", "false").lower() in ("1", "true", "yes"
 # Dedicated Swing Trade State File + Instrument Cache
 SWING_STATE_FILE = "swing_trades.json"
 INSTRUMENT_CACHE_FILE = "t212_instruments_cache.json"
+ROTATION_SIGNAL_FILE = "rotation_signal.json"
+
+SECTOR_ALIAS_MAP = {
+    "Technology": ["Information Technology", "Technology", "Software", "Semiconductors"],
+    "Health Care": ["Health Care", "Healthcare", "Biotechnology", "Pharmaceuticals"],
+    "Financials": ["Financials", "Financial Services", "Banks", "Insurance"],
+    "Energy": ["Energy", "Oil", "Gas"],
+    "Industrials": ["Industrials", "Aerospace", "Defense", "Machinery"],
+    "Discretionary": ["Consumer Discretionary", "Retailing", "Automobiles"],
+    "Staples": ["Consumer Staples", "Food", "Beverages", "Household"],
+    "Utilities": ["Utilities", "Electric", "Water"],
+    "Materials": ["Materials", "Chemicals", "Metals", "Mining"],
+    "Real Estate": ["Real Estate", "REIT"],
+    "Communication": ["Communication Services", "Communication", "Media", "Telecom"],
+}
+
+
+def load_active_rotation_signal(max_age_hours: float = 36.0) -> dict:
+    sig = load_json(ROTATION_SIGNAL_FILE, {})
+    ts_str = sig.get("updated_at")
+    if not ts_str:
+        return {}
+    try:
+        age_hrs = (datetime.utcnow() - datetime.fromisoformat(ts_str)).total_seconds() / 3600.0
+        if age_hrs <= max_age_hours:
+            return sig
+    except Exception:
+        pass
+    return {}
+
+
+def _sector_matches_label(stock_sector: str, target_label: str) -> bool:
+    if not stock_sector or not target_label:
+        return False
+    s_low = stock_sector.lower()
+    aliases = SECTOR_ALIAS_MAP.get(target_label, [target_label])
+    return any(a.lower() in s_low for a in aliases)
 
 # £1,000 Account & Daily Trade Cap (up to 3 trades per day max; no lifetime open-position cap)
 ACCOUNT_SIZE_GBP = float(os.getenv("ACCOUNT_SIZE_GBP", "1000.0"))
@@ -132,6 +169,27 @@ def _to_float(val) -> float:
     elif isinstance(val, np.ndarray):
         val = val.ravel()[-1] if val.size > 0 else np.nan
     return float(val)
+
+
+def normalize_to_gbp(price_val: float, region: str, fx_to_gbp: float, reference_gbp: float | None = None) -> float:
+    """
+    Converts a raw price quote into GBP (£), safely handling UK LSE quotes that
+    sometimes arrive in pence (GBp, e.g., 2634.0 or 2573.0) vs pounds (GBP, e.g., 26.34).
+    """
+    p = float(price_val or 0.0)
+    if p <= 0:
+        return 0.0
+    if region == "UK":
+        # If we have a known GBP reference price, pick whichever of p or p*0.01 is within 5x of it
+        if reference_gbp and reference_gbp > 0:
+            cand_raw = p
+            cand_scaled = p * 0.01
+            err_raw = abs(cand_raw - reference_gbp) / reference_gbp
+            err_scaled = abs(cand_scaled - reference_gbp) / reference_gbp
+            return cand_scaled if err_scaled < err_raw else cand_raw
+        # Otherwise, LSE prices > 150 are typically pence (GBp)
+        return p * 0.01 if p > 150.0 else p
+    return p * fx_to_gbp
 
 
 def get_fx_to_gbp() -> float:
@@ -442,7 +500,7 @@ def fetch_news(ticker: str, region: str) -> list:
                 for a in r.json():
                     title = (a.get("headline") or "").strip()
                     related = [x.strip().upper() for x in (a.get("related") or "").split(",") if x.strip()]
-                    about_it = (tk in related and len(related) <= 3) or re.search(rf"{re.escape(tk)}", title, re.I)
+                    about_it = (tk in related and len(related) <= 3) or re.search(rf" {re.escape(tk)} ", title, re.I)
                     if title and about_it and title not in headlines:
                         headlines.append(title)
                     if len(headlines) >= 5:
@@ -518,12 +576,23 @@ def ai_cherrypick_opportunities(candidates: list, max_picks: int = 5) -> list:
             "news": c.get("_news", [])[:3],
         })
 
+    rot_sig = load_active_rotation_signal()
+    rot_context = ""
+    if rot_sig:
+        rot_context = (
+            f"4) Institutional Sector Money Flow Rotation Signal ({rot_sig.get('date')}): "
+            f"Favor sectors rotating INTO (`{rot_sig.get('rotate_into')}` / {rot_sig.get('rotate_into_sector')}, "
+            f"runner-up `{rot_sig.get('runner_up')}` / {rot_sig.get('runner_up_sector')}) and avoid/penalize "
+            f"sectors rotating OUT OF ({rot_sig.get('rotate_out_of_sectors')}).\n"
+        )
+
     prompt = (
         "You are an equity portfolio strategist running a £1,000 long-only UK & US strategy at 3pm UK time. "
         "Cherry-pick the top opportunities that combine:\n"
         "1) Short-term day-trade pullback quality (VWAP/EMA pullback bounce + relative volume),\n"
         "2) Swing & long-term fundamentals (cash flow, balance sheet, growth, trend),\n"
-        "3) News catalysts & news risk (favor constructive catalysts, penalize legal/regulatory/earnings headwinds).\n\n"
+        "3) News catalysts & news risk (favor constructive catalysts, penalize legal/regulatory/earnings headwinds),\n"
+        f"{rot_context}\n"
         f"Candidates JSON:\n{json.dumps(compact)}\n\n"
         "Return STRICT JSON only (no markdown fences) with schema:\n"
         '{"picks": [{"idx": <int>, "horizon": "SHORT_AND_LONG" | "SWING_LONG" | "DAY_PULLBACK", "reason": "<1 concise sentence>"}]}\n'
@@ -565,12 +634,20 @@ def ai_cherrypick_opportunities(candidates: list, max_picks: int = 5) -> list:
 
 def ai_position_check(ticker: str, qty: float, entry_gbp: float, curr_gbp: float, stop_gbp: float, target_gbp: float, headlines: list) -> tuple[bool, str]:
     pnl_pct = ((curr_gbp - entry_gbp) / entry_gbp * 100.0) if entry_gbp else 0.0
+    rot_sig = load_active_rotation_signal()
+    rot_note = ""
+    if rot_sig:
+        rot_note = (
+            f"Macro Sector Rotation ({rot_sig.get('date')}): Rotate INTO `{rot_sig.get('rotate_into')}` "
+            f"({rot_sig.get('rotate_into_sector')}) | Rotate OUT OF {rot_sig.get('rotate_out_of_sectors')}.\n"
+        )
     prompt = (
         f"You are a risk analyst auditing a LONG swing/pullback stock position in {ticker} ({qty:.4f} sh).\n"
         f"Entry: £{entry_gbp:.2f}, Current: £{curr_gbp:.2f} ({pnl_pct:+.2f}%), "
         f"Stop: £{stop_gbp:.2f}, Target: £{target_gbp:.2f}.\n"
+        f"{rot_note}"
         f"Headlines (short & long-term impact): {' | '.join(headlines) or 'No breaking news'}\n\n"
-        "Start with 'HEALTHY:' or 'AT_RISK:'. Then write 1 concise sentence on thesis & news risk. No HTML."
+        "Start with 'HEALTHY:' or 'AT_RISK:'. Then write 1 concise sentence on thesis, sector flow & news risk. No HTML."
     )
     text = _call_ai(prompt, max_tokens=140)
     if not text:
@@ -931,7 +1008,24 @@ def execute_swing_3pm_uk_us():
     uk_cands = _scan_region_candidates("UK")
     us_cands = _scan_region_candidates("US")
 
-    combined = sorted(uk_cands + us_cands, key=lambda x: (x["score"], x["rel_vol"]), reverse=True)
+    rot_sig = load_active_rotation_signal()
+    combined_raw = uk_cands + us_cands
+    if rot_sig:
+        into_lbl = rot_sig.get("rotate_into_sector", "")
+        runner_lbl = rot_sig.get("runner_up_sector", "")
+        out_lbls = rot_sig.get("rotate_out_of_sectors", [])
+        for c in combined_raw:
+            sec = c.get("sector", "")
+            if _sector_matches_label(sec, into_lbl):
+                c["score"] = round(c["score"] + 12.0, 1)
+                c["why"].append(f"Flow INTO {rot_sig.get('rotate_into')}")
+            elif _sector_matches_label(sec, runner_lbl):
+                c["score"] = round(c["score"] + 6.0, 1)
+                c["why"].append(f"Flow watch {rot_sig.get('runner_up')}")
+            elif any(_sector_matches_label(sec, ol) for ol in out_lbls):
+                c["score"] = round(c["score"] - 12.0, 1)
+                c["why"].append("Sector outflow headwind")
+    combined = sorted(combined_raw, key=lambda x: (x["score"], x["rel_vol"]), reverse=True)
     diversified = pick_diversified(combined, 18)
     cherrypicked = ai_cherrypick_opportunities(diversified, max_picks=AI_CHERRYPICK_COUNT)
 
@@ -1121,13 +1215,15 @@ def monitor_swing_trades():
             # T212 averagePrice is already in GBP for UK equities (or native currency for US).
             # Use a conservative 3.5% stop below averagePrice and 5.0% target above averagePrice
             # in the instrument's native price units so `curr_price` vs `stop`/`target` are apples-to-apples!
-            stop_dist_native = max(avg_price * 0.035, 0.02)
-            stop_native_init = round(max(0.01, avg_price - stop_dist_native), 2)
-            target_native_init = round(avg_price * 1.05, 2)
             fx_now = get_fx_to_gbp() if region == "US" else 1.0
-            entry_gbp_init = round(avg_price * fx_now, 2)
-            stop_gbp_init = round(stop_native_init * fx_now, 2)
-            target_gbp_init = round(target_native_init * fx_now, 2)
+            entry_gbp_init = round(normalize_to_gbp(avg_price, region, fx_now), 2)
+            stop_dist_gbp = max(entry_gbp_init * 0.035, 0.02)
+            stop_gbp_init = round(max(0.01, entry_gbp_init - stop_dist_gbp), 2)
+            target_gbp_init = round(entry_gbp_init * 1.05, 2)
+            # Store `entry`, `stop`, `target` in GBP for UK so native/GBP never mix pence vs pounds
+            entry_stored = entry_gbp_init if region == "UK" else round(avg_price, 2)
+            stop_stored = stop_gbp_init if region == "UK" else round(max(0.01, avg_price * 0.965), 2)
+            target_stored = target_gbp_init if region == "UK" else round(avg_price * 1.05, 2)
             pos_gbp_init = round(qty_live * entry_gbp_init, 2)
 
             open_trades[yf_sym] = {
@@ -1138,9 +1234,9 @@ def monitor_swing_trades():
                 "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
                 "side": "BUY",
                 "quantity": round(qty_live, 4),
-                "entry": round(avg_price, 2),
-                "stop": stop_native_init,
-                "target": target_native_init,
+                "entry": entry_stored,
+                "stop": stop_stored,
+                "target": target_stored,
                 "entry_gbp": entry_gbp_init,
                 "stop_gbp": stop_gbp_init,
                 "target_gbp": target_gbp_init,
@@ -1184,12 +1280,16 @@ def monitor_swing_trades():
 
         if live_tickers is not None and t212_ticker not in live_tickers:
             print(f"ℹ️ {ticker} ({t212_ticker}) no longer in T212 portfolio; reconciling {SWING_STATE_FILE}.")
+            fx_rec = fx_to_gbp if region == "US" else 1.0
+            e_gbp_rec = normalize_to_gbp(float(pos.get("entry_gbp") or entry), region, fx_rec if not pos.get("entry_gbp") else 1.0)
+            if region == "UK" and e_gbp_rec > 150.0:
+                e_gbp_rec = round(e_gbp_rec * 0.01, 2)
             df_rec = latest.get(ticker)
-            px_rec = _to_float(df_rec["Close"].dropna()) if (df_rec is not None and not df_rec.empty and not df_rec["Close"].dropna().empty) else entry
-            u_rec = cfg["scale"] * (fx_to_gbp if region == "US" else 1.0)
-            e_gbp_rec = float(pos.get("entry_gbp") or entry * u_rec)
-            c_gbp_rec = px_rec * u_rec
-            t_gbp_rec = float(pos.get("target_gbp") or target * u_rec)
+            px_rec = _to_float(df_rec["Close"].dropna()) if (df_rec is not None and not df_rec.empty and not df_rec["Close"].dropna().empty) else e_gbp_rec
+            c_gbp_rec = normalize_to_gbp(px_rec, region, fx_rec, e_gbp_rec)
+            if e_gbp_rec > 0 and (c_gbp_rec > e_gbp_rec * 3.0 or c_gbp_rec < e_gbp_rec * 0.3):
+                c_gbp_rec = e_gbp_rec
+            t_gbp_rec = normalize_to_gbp(float(pos.get("target_gbp") or target), region, fx_rec if not pos.get("target_gbp") else 1.0, e_gbp_rec)
             if c_gbp_rec >= t_gbp_rec or c_gbp_rec > e_gbp_rec:
                 rec_reason = f"Target profit reached / closed in profit (£{c_gbp_rec:.2f} vs entry £{e_gbp_rec:.2f}, target £{t_gbp_rec:.2f})"
             else:
@@ -1224,19 +1324,28 @@ def monitor_swing_trades():
                 dirty = True
                 continue
 
-        df = latest.get(ticker)
-        raw_px = _to_float(df["Close"].dropna()) if (df is not None and not df.empty and not df["Close"].dropna().empty) else entry
-        # Guard against unit/scale mismatch where raw quote is >20x or <0.05x entry
-        if entry > 0 and (raw_px > entry * 20.0 or raw_px < entry * 0.05):
-            curr_price = entry
-        else:
-            curr_price = raw_px
+        fx_eff = fx_to_gbp if region == "US" else 1.0
+        raw_entry_gbp = float(pos.get("entry_gbp") or normalize_to_gbp(entry, region, fx_eff))
+        entry_gbp = normalize_to_gbp(raw_entry_gbp, region, 1.0) if region == "UK" else raw_entry_gbp
+        if entry_gbp <= 0:
+            entry_gbp = normalize_to_gbp(entry, region, fx_eff)
 
-        unit_to_gbp = cfg["scale"] * (fx_to_gbp if region == "US" else 1.0)
-        entry_gbp = float(pos.get("entry_gbp") or entry * unit_to_gbp)
-        curr_gbp = curr_price * unit_to_gbp
-        stop_gbp = float(pos.get("stop_gbp") or stop * unit_to_gbp)
-        target_gbp = float(pos.get("target_gbp") or target * unit_to_gbp)
+        raw_stop_gbp = float(pos.get("stop_gbp") or normalize_to_gbp(stop, region, fx_eff, entry_gbp))
+        stop_gbp = normalize_to_gbp(raw_stop_gbp, region, 1.0, entry_gbp) if region == "UK" else raw_stop_gbp
+        if stop_gbp <= 0 or stop_gbp >= entry_gbp:
+            stop_gbp = round(entry_gbp * 0.965, 2)
+
+        raw_target_gbp = float(pos.get("target_gbp") or normalize_to_gbp(target, region, fx_eff, entry_gbp))
+        target_gbp = normalize_to_gbp(raw_target_gbp, region, 1.0, entry_gbp) if region == "UK" else raw_target_gbp
+        if target_gbp <= entry_gbp:
+            target_gbp = round(entry_gbp * 1.05, 2)
+
+        df = latest.get(ticker)
+        raw_px = _to_float(df["Close"].dropna()) if (df is not None and not df.empty and not df["Close"].dropna().empty) else entry_gbp
+        curr_gbp = normalize_to_gbp(raw_px, region, fx_eff, entry_gbp)
+        if entry_gbp > 0 and (curr_gbp > entry_gbp * 3.0 or curr_gbp < entry_gbp * 0.3):
+            curr_gbp = entry_gbp
+        curr_price = curr_gbp if region == "UK" else (curr_gbp / fx_eff if fx_eff else curr_gbp)
         broker_stop_price = stop_gbp if region == "UK" else stop
 
         heads = fetch_news(ticker, region)
