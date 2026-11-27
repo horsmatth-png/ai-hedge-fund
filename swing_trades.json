@@ -59,6 +59,25 @@
             "buy_order_id": 58700121492,
             "stop_order_id": 58700121499,
             "opened_at": "2026-11-27T15:51:22.733158"
+        },
+        "APPF": {
+            "ticker": "APPF",
+            "t212_ticker": "APPF_US_EQ",
+            "region": "US",
+            "horizon": "SYNCED_PORTFOLIO",
+            "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
+            "side": "BUY",
+            "quantity": 0.2987,
+            "entry": 216.34,
+            "stop": 208.77,
+            "target": 227.15,
+            "entry_gbp": 165.12,
+            "stop_gbp": 159.34,
+            "target_gbp": 173.38,
+            "position_gbp": 49.32,
+            "buy_order_id": null,
+            "stop_order_id": null,
+            "opened_at": "2026-11-27T16:37:55.633267"
         }
     },
     "risk_alerts": {
