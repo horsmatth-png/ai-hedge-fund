@@ -22,26 +22,6 @@
             "stop_order_id": 58550027972,
             "opened_at": "2026-11-24T16:00:46.778724"
         },
-        "CR1": {
-            "ticker": "CR1",
-            "t212_ticker": "CR1_US_EQ",
-            "region": "US",
-            "horizon": "SYNCED_PORTFOLIO",
-            "ai_reason": "Auto-imported from live T212 portfolio for profit/stop surveillance.",
-            "side": "BUY",
-            "quantity": 1.4016,
-            "entry": 215.49,
-            "stop": 207.95,
-            "target": 226.26,
-            "entry_gbp": 164.25,
-            "stop_gbp": 158.5,
-            "target_gbp": 172.46,
-            "position_gbp": 230.21,
-            "buy_order_id": null,
-            "stop_order_id": null,
-            "opened_at": "2026-11-26T14:15:05.996325",
-            "close_alert_ts": "2026-11-27T13:00:58.128170"
-        },
         "HSX.L": {
             "ticker": "HSX.L",
             "t212_ticker": "HSXl_EQ",
