@@ -1,36 +1,27 @@
 {
-    "date": "2026-11-26",
+    "date": "2026-11-27",
     "counts": {
-        "UK": 3,
+        "UK": 2,
         "US": 0
     },
     "active_orders": {
-        "KA.D.BRBY.DAILY.IP": {
-            "dealReference": "CZ73UB4UYDGTYSB",
-            "ticker": "BRBY.L",
+        "KA.D.CNA.DAILY.IP": {
+            "dealReference": "LLACG6TPMYQTYSX",
+            "ticker": "CNA.L",
             "region": "UK",
             "side": "LONG",
-            "stopLevel": 1174.3,
-            "limitLevel": 1246.2,
-            "timestamp": "2026-11-26T09:42:28.855330"
+            "stopLevel": 141.0,
+            "limitLevel": 171.0,
+            "timestamp": "2026-11-27T09:41:47.195320"
         },
-        "KA.D.ICP.DAILY.IP": {
-            "dealReference": "GQ4UZGNTVTLTYSB",
-            "ticker": "ICG.L",
+        "KA.D.SMIN.DAILY.IP": {
+            "dealReference": "HLY5GBSNTVQTYSX",
+            "ticker": "SMIN.L",
             "region": "UK",
             "side": "LONG",
-            "stopLevel": 1763.2,
-            "limitLevel": 1871.2,
-            "timestamp": "2026-11-26T09:42:33.890685"
-        },
-        "KA.D.REL.DAILY.IP": {
-            "dealReference": "9GZHVKPG8EUTYSB",
-            "ticker": "REL.L",
-            "region": "UK",
-            "side": "LONG",
-            "stopLevel": 3031.0,
-            "limitLevel": 3216.6,
-            "timestamp": "2026-11-26T09:42:36.892953"
+            "stopLevel": 2541.5,
+            "limitLevel": 2697.1,
+            "timestamp": "2026-11-27T09:41:48.920188"
         }
     },
     "risk_alerts": {}
