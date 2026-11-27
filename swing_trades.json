@@ -1,7 +1,7 @@
 {
-    "date": "2026-11-26",
+    "date": "2026-11-27",
     "mode": "T212_SWING_3PM_UK_US_1K",
-    "trades_executed_today": 0,
+    "trades_executed_today": 1,
     "open_swing_trades": {
         "AZN.L": {
             "ticker": "AZN.L",
@@ -40,6 +40,25 @@
             "buy_order_id": null,
             "stop_order_id": null,
             "opened_at": "2026-11-26T16:33:41.674247"
+        },
+        "ATR": {
+            "ticker": "ATR",
+            "t212_ticker": "ATR_US_EQ",
+            "region": "US",
+            "horizon": "SHORT_AND_LONG",
+            "ai_reason": "Ranked by fundamental + VWAP/EMA pullback score and clean news.",
+            "side": "BUY",
+            "quantity": 2.705,
+            "entry": 145.27,
+            "stop": 141.22,
+            "target": 155.4,
+            "entry_gbp": 110.9,
+            "stop_gbp": 107.81,
+            "target_gbp": 118.64,
+            "position_gbp": 300.0,
+            "buy_order_id": 58700121492,
+            "stop_order_id": 58700121499,
+            "opened_at": "2026-11-27T15:51:22.733158"
         }
     },
     "risk_alerts": {
