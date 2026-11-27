@@ -2,7 +2,7 @@
     "date": "2026-11-27",
     "counts": {
         "UK": 2,
-        "US": 0
+        "US": 3
     },
     "active_orders": {
         "KA.D.CNA.DAILY.IP": {
@@ -22,6 +22,33 @@
             "stopLevel": 2541.5,
             "limitLevel": 2697.1,
             "timestamp": "2026-11-27T09:41:48.920188"
+        },
+        "UC.D.MU.DAILY.IP": {
+            "dealReference": "HH55YFTM5T4TYSX",
+            "ticker": "MU",
+            "region": "US",
+            "side": "LONG",
+            "stopLevel": 60677.9,
+            "limitLevel": 69196.4,
+            "timestamp": "2026-11-27T15:56:03.778551"
+        },
+        "UD.D.TASR.DAILY.IP": {
+            "dealReference": "YY8TBG7Y2Q4TYSX",
+            "ticker": "AXON",
+            "region": "US",
+            "side": "LONG",
+            "stopLevel": 35691.5,
+            "limitLevel": 38750.9,
+            "timestamp": "2026-11-27T15:56:05.377327"
+        },
+        "SB.D.DELLUS.DAILY.IP": {
+            "dealReference": "RCB6KVWG96QTYSX",
+            "ticker": "DELL",
+            "region": "US",
+            "side": "LONG",
+            "stopLevel": 29876.3,
+            "limitLevel": 34500.2,
+            "timestamp": "2026-11-27T15:56:07.136226"
         }
     },
     "risk_alerts": {
